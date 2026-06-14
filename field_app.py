@@ -22,22 +22,17 @@ from datetime import date, time, datetime
 # ── Backend path ─────────────────────────────────────────────────────────────
 _HERE = os.path.dirname(os.path.abspath(__file__))
 sys.path.insert(0, os.path.join(_HERE, "backend"))
-import importlib
 import scorer
-importlib.reload(scorer)
 from scorer  import (
     score_all_observations, get_point_diagnostics, scores_to_geojson,
     compute_plant_scores, detect_high_contrast_days, score_contrast_observations,
 )
 import inaturalist_client
-importlib.reload(inaturalist_client)
 import fetcher
-importlib.reload(fetcher)
 import base64
 from fetcher import smart_fetch, get_missing_data_points, load_master_csv
 from grid_utils import generate_grid
 import geometry_utils
-importlib.reload(geometry_utils)
 from geometry_utils import get_rotated_corners
 from PIL import Image, ImageDraw
 from streamlit_image_coordinates import streamlit_image_coordinates
@@ -634,7 +629,9 @@ else:
         if "map_overlays" in st.session_state:
             for overlay in st.session_state.map_overlays:
                 _ov_dir = os.path.join(get_hunt_dir(), "overlays")
-                _resolved_path = os.path.join(_ov_dir, overlay["name"])
+                # Always resolve path relative to hunt dir (never trust stored absolute paths)
+                _ov_name = overlay.get("name", "")
+                _resolved_path = os.path.join(_ov_dir, os.path.basename(_ov_name))
                 
                 if overlay.get("visible", True) and os.path.exists(_resolved_path):
                     with open(_resolved_path, "rb") as f:
@@ -669,8 +666,8 @@ else:
         clicked_lat = None
         clicked_lon = None
         clicked_coords = None
-        if "scoring_map" in st.session_state and st.session_state.scoring_map:
-            points = st.session_state.scoring_map.get("selection", {}).get("points", [])
+        if "field_scoring_map" in st.session_state and st.session_state.field_scoring_map:
+            points = st.session_state.field_scoring_map.get("selection", {}).get("points", [])
             if points:
                 pt = points[0]
                 lat = pt.get("lat") or pt.get("y")
@@ -775,7 +772,7 @@ else:
             use_container_width=True,
             config={"scrollZoom": True},
             on_select="rerun",
-            key="scoring_map"
+            key="field_scoring_map"
         )
         st.caption("💡 **Tip**: Click any point on the map above to load its coordinates instantly into the **Coordinate Copier** below!")
 
@@ -837,7 +834,7 @@ else:
                 st.markdown(f"[🔗 View on Google Maps]({gmaps_url})")
                 
                 if st.button("Reset Selection", use_container_width=True, help="Clear map selection and go back to dropdown"):
-                    st.session_state.scoring_map = None
+                    st.session_state.field_scoring_map = None
                     st.rerun()
             else:
                 st.caption("Click any point on the map, or select a location from the dropdown below to copy coordinates:")
