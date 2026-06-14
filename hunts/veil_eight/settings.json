@@ -1,0 +1,20 @@
+{
+  "grid_center_lat": 40.31,
+  "grid_center_lon": -75.13,
+  "grid_radius_mi": 100.0,
+  "map_overlays": [
+    {
+      "name": "signal-2026-06-14-121551_002.png",
+      "path": "C:\\veil_finder_project\\hunts\\veil_eight\\overlays\\signal-2026-06-14-121551_002.png",
+      "lat": 40.37958,
+      "lon": -77.031272,
+      "width": 322.1,
+      "height": 607.422467771639,
+      "rotation": 0.0,
+      "opacity": 0.1,
+      "anchor_x": 0.016129032258064516,
+      "anchor_y": 0.5571428571428572,
+      "visible": true
+    }
+  ]
+}
