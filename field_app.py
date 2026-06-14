@@ -507,6 +507,11 @@ with st.sidebar:
 # ─── Map View ──────────────────────────────────────────────────────────────
 st.header("Location Scoring Map")
 
+# Auto-select master parquet if not set
+if st.session_state.selected_csv is None:
+    if os.path.exists(get_master_parquet()):
+        st.session_state.selected_csv = get_master_parquet()
+
 fog_df = get_fog_df()
 if fog_df is None:
     st.warning("No satellite data found for this hunt.")

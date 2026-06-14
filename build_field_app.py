@@ -65,6 +65,12 @@ out.append('            st.markdown("---")\n')
 # 6. Map View
 out.append("\n# ─── Map View ──────────────────────────────────────────────────────────────\n")
 out.append("st.header(\"Location Scoring Map\")\n\n")
+
+out.append("# Auto-select master parquet if not set\n")
+out.append("if st.session_state.selected_csv is None:\n")
+out.append("    if os.path.exists(get_master_parquet()):\n")
+out.append("        st.session_state.selected_csv = get_master_parquet()\n\n")
+
 out.append("fog_df = get_fog_df()\n")
 out.append("if fog_df is None:\n")
 out.append("    st.warning(\"No satellite data found for this hunt.\")\n")
