@@ -503,6 +503,11 @@ with st.sidebar:
                     save_settings(st.session_state.settings_cache)
                     st.rerun()
             st.markdown("---")
+    with st.expander("🗺️ Map Settings", expanded=False):
+        new_trans = st.slider("Point Transparency (%)", min_value=0, max_value=95, value=st.session_state.map_transparency, step=5, help="Make grid points semi-transparent to view roads and landmarks under them.")
+        if new_trans != st.session_state.map_transparency:
+            st.session_state.map_transparency = new_trans
+            st.rerun()
 
 # ─── Map View ──────────────────────────────────────────────────────────────
 st.header("Location Scoring Map")

@@ -62,6 +62,13 @@ out.append('                    save_settings(st.session_state.settings_cache)\n
 out.append('                    st.rerun()\n')
 out.append('            st.markdown("---")\n')
 
+# 5.5 Map Settings
+out.append('    with st.expander("🗺️ Map Settings", expanded=False):\n')
+out.append('        new_trans = st.slider("Point Transparency (%)", min_value=0, max_value=95, value=st.session_state.map_transparency, step=5, help="Make grid points semi-transparent to view roads and landmarks under them.")\n')
+out.append('        if new_trans != st.session_state.map_transparency:\n')
+out.append('            st.session_state.map_transparency = new_trans\n')
+out.append('            st.rerun()\n')
+
 # 6. Map View
 out.append("\n# ─── Map View ──────────────────────────────────────────────────────────────\n")
 out.append("st.header(\"Location Scoring Map\")\n\n")
