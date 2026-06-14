@@ -750,7 +750,12 @@ with st.sidebar:
                 n_lat = st.number_input("Anchor Lat", value=overlay["lat"], step=0.01, format="%.4f", key=f"ov_lat_{idx}")
                 n_lon = st.number_input("Anchor Lon", value=overlay["lon"], step=0.01, format="%.4f", key=f"ov_lon_{idx}")
                 
-                img = Image.open(overlay["path"])
+                _ov_dir = os.path.join(get_hunt_dir(), "overlays")
+                _resolved_path = os.path.join(_ov_dir, overlay["name"])
+                if not os.path.exists(_resolved_path):
+                    st.warning(f"Image not found: {_resolved_path}")
+                    continue
+                img = Image.open(_resolved_path)
                 img_width, img_height = img.size
                 aspect_ratio = img_width / max(img_height, 1)
                 
@@ -1328,11 +1333,14 @@ with tab3:
             mapbox_layers = []
             if "map_overlays" in st.session_state:
                 for overlay in st.session_state.map_overlays:
-                    if overlay.get("visible", True) and os.path.exists(overlay["path"]):
-                        with open(overlay["path"], "rb") as f:
+                    _ov_dir = os.path.join(get_hunt_dir(), "overlays")
+                    _resolved_path = os.path.join(_ov_dir, overlay["name"])
+                    
+                    if overlay.get("visible", True) and os.path.exists(_resolved_path):
+                        with open(_resolved_path, "rb") as f:
                             b64 = base64.b64encode(f.read()).decode("utf-8")
                         
-                        ext = os.path.splitext(overlay["path"])[1].lower()
+                        ext = os.path.splitext(_resolved_path)[1].lower()
                         mime = "image/png" if ext == ".png" else "image/jpeg"
                         b64_url = f"data:{mime};base64,{b64}"
                         
