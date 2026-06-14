@@ -1,0 +1,62 @@
+[
+  {
+    "id": "d05e4173-143c-4cf5-beb4-6112b47224d3",
+    "date": "2026-05-27",
+    "time_start": "06:00",
+    "time_end": "09:00",
+    "fog_observed": true,
+    "notes": "",
+    "photo_filename": "20260527_130007.jpg",
+    "created_at": "2026-05-31T12:40:03.908625"
+  },
+  {
+    "id": "5fb980b4-7311-45c4-a03e-ad588d6bc552",
+    "date": "2026-05-27",
+    "time_start": "09:00",
+    "time_end": "12:00",
+    "fog_observed": true,
+    "notes": "",
+    "photo_filename": "20260527_160007.jpg",
+    "created_at": "2026-05-31T13:12:40.786109"
+  },
+  {
+    "id": "7e94938f-6c0f-4463-ab52-b3e1f1ca7972",
+    "date": "2026-05-28",
+    "time_start": "03:00",
+    "time_end": "09:00",
+    "fog_observed": false,
+    "notes": "",
+    "photo_filename": "",
+    "created_at": "2026-05-31T13:15:01.277645"
+  },
+  {
+    "id": "108977b9-2384-4586-b3cc-ebde20e71fe4",
+    "date": "2026-06-01",
+    "time_start": "03:00",
+    "time_end": "09:00",
+    "fog_observed": false,
+    "notes": "",
+    "photo_filename": "",
+    "created_at": "2026-06-01T14:10:59.773818"
+  },
+  {
+    "id": "d7f8de9a-1b22-48de-95cd-e2aede8a5bcb",
+    "date": "2026-06-02",
+    "time_start": "00:00",
+    "time_end": "06:00",
+    "fog_observed": false,
+    "notes": "",
+    "photo_filename": "",
+    "created_at": "2026-06-03T20:44:15.615057"
+  },
+  {
+    "id": "d2dc4f35-2981-4ded-9d29-82a06d391366",
+    "date": "2026-06-11",
+    "time_start": "03:00",
+    "time_end": "07:00",
+    "fog_observed": true,
+    "notes": "",
+    "photo_filename": "",
+    "created_at": "2026-06-11T09:53:53.746538"
+  }
+]
