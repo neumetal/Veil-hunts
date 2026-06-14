@@ -64,7 +64,7 @@ out.append('            st.markdown("---")\n')
 
 # 5.5 Map Settings
 out.append('    with st.expander("🗺️ Map Settings", expanded=False):\n')
-out.append('        new_trans = st.slider("Point Transparency (%)", min_value=0, max_value=95, value=st.session_state.map_transparency, step=5, help="Make grid points semi-transparent to view roads and landmarks under them.")\n')
+out.append('        new_trans = st.slider("Point Transparency (%)", min_value=0, max_value=95, value=int(st.session_state.map_transparency), step=5, help="Make grid points semi-transparent to view roads and landmarks under them.")\n')
 out.append('        if new_trans != st.session_state.map_transparency:\n')
 out.append('            st.session_state.map_transparency = new_trans\n')
 out.append('            st.rerun()\n')
