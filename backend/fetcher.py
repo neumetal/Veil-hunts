@@ -39,19 +39,21 @@ from veil_logic  import build_master_dataframe
 # CSV helpers
 # ─────────────────────────────────────────────────────────────────────────────
 def load_master_csv(export_dir: str) -> pd.DataFrame | None:
-    """Load fog_master.csv if it exists, else return None.
+    """Load fog_master.parquet if it exists, else return None.
     If CloudCover_Pct column is missing (old schema), return None to force re-fetch.
     """
-    master_csv = os.path.join(export_dir, "fog_master.csv")
-    if os.path.exists(master_csv):
+    master_file = os.path.join(export_dir, "fog_master.parquet")
+    if os.path.exists(master_file):
         try:
-            df = pd.read_csv(master_csv, parse_dates=["Timestamp"])
+            df = pd.read_parquet(master_file)
             if "CloudCover_Pct" not in df.columns:
-                print("WARNING: Old master CSV detected without CloudCover_Pct. Forcing re-fetch.")
+                print("WARNING: Old master Parquet detected without CloudCover_Pct. Forcing re-fetch.")
                 return None
+            if "Timestamp" in df.columns and not pd.api.types.is_datetime64_any_dtype(df["Timestamp"]):
+                df["Timestamp"] = pd.to_datetime(df["Timestamp"])
             return df
         except Exception as e:
-            print(f"WARNING: Could not load master CSV: {e}")
+            print(f"WARNING: Could not load master Parquet: {e}")
     return None
 
 
@@ -186,7 +188,7 @@ def smart_fetch(
     Fetch satellite fog data only for observation dates not already in the master CSV,
     specifically checking if the required data exists for all points in the dynamic grid.
     """
-    os.makedirs(os.path.dirname(MASTER_CSV), exist_ok=True)
+    os.makedirs(export_dir, exist_ok=True)
 
     if not observations:
         return None, 0, "No observations logged yet — nothing to fetch."
@@ -197,7 +199,7 @@ def smart_fetch(
     log_fn(f"Grid contains {len(grid_points)} points.")
 
     # 2. Find missing dates for our grid
-    log_fn("Checking local fog_master.csv for missing data...")
+    log_fn("Checking local fog_master.parquet for missing data...")
     existing_df = load_master_csv(export_dir)
     all_dates, missing_points = get_missing_data_points(observations, existing_df, grid_points)
 
@@ -247,13 +249,13 @@ def smart_fetch(
 
     master = master.sort_values(["Timestamp", "Lat", "Lon"]).reset_index(drop=True)
     # 6. Save back to master
-    master_csv = os.path.join(export_dir, "fog_master.csv")
-    master.to_csv(master_csv, index=False)
+    master_file = os.path.join(export_dir, "fog_master.parquet")
+    master.to_parquet(master_file, engine="pyarrow", index=False)
 
     n_new_pts = len(missing_points)
     msg = (
         f"Fetched data for {n_new_pts} point(s). "
-        f"Master CSV now contains {len(master)} total rows."
+        f"Master data now contains {len(master)} total rows."
     )
     log_fn(msg)
     return master, n_new_pts, msg

@@ -2060,7 +2060,7 @@ with tab6:
     if st.button("🚀 Backup All Hunts to GitHub", type="primary"):
         with st.spinner("Pushing to GitHub..."):
             try:
-                subprocess.run(["git", "add", "."], cwd=_HERE, check=True)
+                subprocess.run(["git", "add", "hunts/"], cwd=_HERE, check=True)
                 ts = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
                 # git commit returns non-zero if there are no changes, ignore errors
                 subprocess.run(["git", "commit", "-m", f"Backup: {ts}"], cwd=_HERE)
@@ -2100,3 +2100,325 @@ with tab6:
         pass
     else:
         st.info("No observations to export yet.")
+
+# ─── Map View ──────────────────────────────────────────────────────────────
+st.header("Location Scoring Map")
+
+fog_df = get_fog_df()
+if fog_df is None:
+    st.warning("Select a satellite data CSV in the sidebar.")
+elif not st.session_state.observations:
+    st.info("No observations loaded for this hunt.")
+else:
+    scores = get_scores()
+    if scores is not None and not scores.empty:
+        scores = recompute_combined(scores)
+
+        # Summary metrics
+        top1 = scores.iloc[0]
+        m1, m2, m3, m4 = st.columns(4)
+        if st.session_state.selected_plants:
+            m1.metric("Top Suitability Score", f"{top1['CombinedScore']:.2f}")
+            m2.metric("Top Plant Score", f"{top1['PlantScore']:.2f}")
+        else:
+            m1.metric("Top Candidate Match Rate",  f"{top1['MatchRate']:.1%}")
+            m2.metric("Top Candidate Confidence",   f"{top1['Confidence_Z']:+.2f}sigma")
+        m3.metric("Grid Points Scored",         f"{len(scores):,}")
+        m4.metric("Observations Used",          f"{len(st.session_state.observations)}")
+        # Map
+        color_col = "CombinedScore"
+        color_title = "Combined Suitability"
+        color_scale = "Plotly3"
+        
+        _max_score = float(scores["CombinedScore"].max()) if not scores["CombinedScore"].empty and not pd.isna(scores["CombinedScore"].max()) else 1.0
+        range_color = [0.0, _max_score if _max_score > 0 else 1.0]
+        map_df = scores.copy()
+        # Clip very small values so zero-match points still render (tiny dot)
+        map_df["_size"] = (map_df[color_col].fillna(0) * 15).clip(lower=1.5)
+        map_df["MatchRate_pct"] = (map_df["MatchRate"] * 100).round(1)
+        # Dynamic map center and zoom level based on user's active grid settings
+        map_center = {
+            "lat": st.session_state.grid_center_lat,
+            "lon": st.session_state.grid_center_lon
+        }
+        # Clamped auto-zoom calculation: 13.5 - log2(radius_mi)
+        auto_zoom = float(np.clip(13.5 - np.log2(st.session_state.grid_radius_mi), 3.0, 15.0))
+        custom_data_cols = ["Lat", "Lon", "Elevation_m", "IsValley",
+                            "MatchRate_pct", "Confidence_Z", "Matches", "ObsCount"]
+        if "PlantScore" in map_df.columns:
+            custom_data_cols += ["PlantScore"]       # index 8
+        else:
+            map_df["PlantScore"] = 1.0
+            custom_data_cols += ["PlantScore"]
+        if "CloudScore" in map_df.columns:
+            custom_data_cols += ["CloudScore"]       # index 9
+        else:
+            map_df["CloudScore"] = 1.0
+            custom_data_cols += ["CloudScore"]
+        if "ContrastScore" in map_df.columns:
+            custom_data_cols += ["ContrastScore"]    # index 10
+        else:
+            map_df["ContrastScore"] = 1.0
+            custom_data_cols += ["ContrastScore"]
+        if "CombinedScore" in map_df.columns:
+            custom_data_cols += ["CombinedScore"]    # index 11
+        else:
+            map_df["CombinedScore"] = map_df["MatchRate"]
+            custom_data_cols += ["CombinedScore"]
+        fig = px.scatter_mapbox(
+            map_df,
+            lat="Lat",
+            lon="Lon",
+            color=color_col,
+            size="_size",
+            size_max=18,
+            color_continuous_scale=color_scale,
+            range_color=range_color,
+            opacity=(100.0 - st.session_state.map_transparency) / 100.0,
+            custom_data=custom_data_cols,
+            mapbox_style="carto-darkmatter",
+            zoom=auto_zoom,
+            center=map_center,
+            height=570,
+        )
+        # Generate hover template
+        hover_template_str = (
+            "<b>Match Rate: %{customdata[4]:.1f}%</b><br>"
+            "Confidence: %{customdata[5]:+.2f}sigma<br>"
+            "Matches: %{customdata[6]} / %{customdata[7]} obs<br>"
+            "Lat: %{customdata[0]:.4f}  Lon: %{customdata[1]:.4f}<br>"
+            "Elevation: %{customdata[2]:.0f} m  Valley: %{customdata[3]}"
+        )
+        hover_template_str += (
+            "<br>Plant Proximity Score: %{customdata[8]:.2f}"
+            "<br>Cloud Differential: %{customdata[9]:.2f}"
+            "<br>High-Contrast Cloud Score: %{customdata[10]:.2f}"
+            "<br>Combined Suitability: %{customdata[11]:.2f}"
+        )
+        hover_template_str += "<extra></extra>"
+        fig.update_traces(
+            hovertemplate=hover_template_str
+        )
+        # Map Overlays
+        mapbox_layers = []
+        if "map_overlays" in st.session_state:
+            for overlay in st.session_state.map_overlays:
+                if overlay.get("visible", True) and os.path.exists(overlay["path"]):
+                    with open(overlay["path"], "rb") as f:
+                        b64 = base64.b64encode(f.read()).decode("utf-8")
+                    
+                    ext = os.path.splitext(overlay["path"])[1].lower()
+                    mime = "image/png" if ext == ".png" else "image/jpeg"
+                    b64_url = f"data:{mime};base64,{b64}"
+                    
+                    corners = get_rotated_corners(
+                        center_lat=float(overlay["lat"]),
+                        center_lon=float(overlay["lon"]),
+                        width_km=float(overlay["width"]),
+                        height_km=float(overlay["height"]),
+                        rotation_deg=float(overlay["rotation"]),
+                        anchor_x=float(overlay.get("anchor_x", 0.5)),
+                        anchor_y=float(overlay.get("anchor_y", 0.5))
+                    )
+                    
+                    mapbox_layers.append({
+                        "sourcetype": "image",
+                        "source": b64_url,
+                        "coordinates": corners,
+                        "opacity": float(overlay["opacity"]),
+                        "below": "traces"
+                    })
+        if mapbox_layers:
+            fig.update_layout(mapbox_layers=mapbox_layers)
+        # Extract coordinates clicked/selected on the map
+        clicked_lat = None
+        clicked_lon = None
+        clicked_coords = None
+        if "scoring_map" in st.session_state and st.session_state.scoring_map:
+            points = st.session_state.scoring_map.get("selection", {}).get("points", [])
+            if points:
+                pt = points[0]
+                lat = pt.get("lat") or pt.get("y")
+                lon = pt.get("lon") or pt.get("x")
+                if lat is not None and lon is not None:
+                    clicked_lat = float(lat)
+                    clicked_lon = float(lon)
+                    clicked_coords = f"{clicked_lat:.6f}, {clicked_lon:.6f}"
+        # iNaturalist pins trace: ONLY show if a grid point is clicked
+        if st.session_state.plant_obs_dict and clicked_lat is not None:
+            colors = px.colors.qualitative.Plotly
+            species_list = list(st.session_state.plant_obs_dict.keys())
+            
+            for idx, species_name in enumerate(species_list):
+                obs_list = st.session_state.plant_obs_dict[species_name]
+                species_color = colors[idx % len(colors)]
+                
+                filtered_obs = []
+                for o in obs_list:
+                    # Only include pins within influence radius of the CLICKED point
+                    dist = scorer.haversine_distance(clicked_lat, clicked_lon, o["lat"], o["lon"])
+                    if dist <= st.session_state.plant_influence_radius:
+                        filtered_obs.append({
+                            "Lat": o["lat"],
+                            "Lon": o["lon"],
+                            "Species": species_name,
+                            "User": o["user"],
+                            "Observed On": o["observed_on"]
+                        })
+                
+                if filtered_obs:
+                    obs_df = pd.DataFrame(filtered_obs)
+                    fig.add_trace(go.Scattermapbox(
+                        lat=obs_df["Lat"],
+                        lon=obs_df["Lon"],
+                        mode="markers",
+                        marker=dict(
+                            size=12,
+                            color=species_color,
+                            symbol="circle"
+                        ),
+                        customdata=np.stack([
+                            obs_df["Species"],
+                            obs_df["User"],
+                            obs_df["Observed On"],
+                            obs_df["Lat"],
+                            obs_df["Lon"]
+                        ], axis=-1),
+                        hovertemplate=(
+                            "<b>🌿 iNaturalist Observation</b><br>"
+                            "Species: %{customdata[0]}<br>"
+                            "Observer: @%{customdata[1]}<br>"
+                            "Observed: %{customdata[2]}<br>"
+                            "Location: %{customdata[3]:.4f}, %{customdata[4]:.4f}"
+                            "<extra></extra>"
+                        ),
+                        name=f"{species_name} (in radius)"
+                    ))
+        # Custom center marker
+        fig.add_trace(go.Scattermapbox(
+            lat=[st.session_state.grid_center_lat],
+            lon=[st.session_state.grid_center_lon],
+            mode="markers+text",
+            marker=dict(size=14, color="white", symbol="star"),
+            text=["Grid Center"],
+            textposition="top right",
+            textfont=dict(color="white", size=11),
+            hoverinfo="text",
+            hovertext=f"Grid Center ({st.session_state.grid_center_lat}, {st.session_state.grid_center_lon})",
+            name="Center",
+            showlegend=False,
+        ))
+        # Preserve manual zoom/pan state unless grid parameters change
+        grid_rev_key = f"{st.session_state.grid_center_lat}_{st.session_state.grid_center_lon}_{st.session_state.grid_radius_mi}"
+        fig.update_layout(
+            uirevision=grid_rev_key,
+            paper_bgcolor="#0d1117",
+            plot_bgcolor="#0d1117",
+            margin=dict(l=0, r=0, t=0, b=0),
+            coloraxis_colorbar=dict(
+                title=dict(
+                    text="Match Rate",
+                    font=dict(color="#e6edf3"),
+                ),
+                tickformat=".0%",
+                tickvals=[0, 0.25, 0.5, 0.75, 1.0],
+                len=0.55,
+                bgcolor="#161b22",
+                bordercolor="#30363d",
+                borderwidth=1,
+                tickfont=dict(color="#e6edf3"),
+            ),
+        )
+        # Enable interactive click and selection directly on the map
+        st.plotly_chart(
+            fig,
+            use_container_width=True,
+            config={"scrollZoom": True},
+            on_select="rerun",
+            key="scoring_map"
+        )
+        st.caption("💡 **Tip**: Click any point on the map above to load its coordinates instantly into the **Coordinate Copier** below!")
+        col_tbl, col_cpy = st.columns([2.7, 1.3])
+        # coordinates were already extracted above
+        with col_tbl:
+            st.subheader("Top 10 Candidate Locations")
+            tbl_cols = ["Lat", "Lon", "Elevation_m", "IsValley", "MatchRate", "Confidence_Z", "Matches", "ObsCount"]
+            if "PlantScore" in scores.columns:
+                tbl_cols += ["PlantScore"]
+            if "CloudScore" in scores.columns:
+                tbl_cols += ["CloudScore"]
+            if "ContrastScore" in scores.columns:
+                tbl_cols += ["ContrastScore"]
+            if "CombinedScore" in scores.columns:
+                tbl_cols += ["CombinedScore"]
+            top10 = scores.head(10)[tbl_cols].copy()
+            top10.insert(0, "Rank", range(1, len(top10) + 1))
+            # Add formatted copy-paste coordinates column
+            top10["Google Maps Coordinates"] = top10.apply(lambda r: f"{float(r['Lat']):.6f}, {float(r['Lon']):.6f}", axis=1)
+            top10["MatchRate"]    = top10["MatchRate"].map("{:.1%}".format)
+            top10["Confidence_Z"] = top10["Confidence_Z"].map("{:+.2f}sigma".format)
+            top10["Elevation_m"]  = top10["Elevation_m"].map("{:.0f} m".format)
+            col_names = ["Rank", "Lat", "Lon", "Elevation", "Valley?",
+                         "Match Rate", "Confidence", "Matches", "Obs Used"]
+            if "PlantScore" in scores.columns:
+                top10["PlantScore"] = top10["PlantScore"].map("{:.2f}".format)
+                col_names += ["Plant Score"]
+            if "CloudScore" in scores.columns:
+                top10["CloudScore"] = top10["CloudScore"].map("{:.2f}".format)
+                col_names += ["Cloud Diff"]
+            if "ContrastScore" in scores.columns:
+                top10["ContrastScore"] = top10["ContrastScore"].map("{:.2f}".format)
+                col_names += ["Contrast"]
+            if "CombinedScore" in scores.columns:
+                top10["CombinedScore"] = top10["CombinedScore"].map("{:.2f}".format)
+                col_names += ["Combined Score"]
+            col_names += ["Google Maps Coordinates"]
+            top10.columns = col_names
+            st.dataframe(top10, use_container_width=True, hide_index=True)
+        with col_cpy:
+            st.subheader("📍 Coordinate Copier")
+            
+            if clicked_coords:
+                st.success("🎯 **Map Point Selected!**")
+                st.markdown("**Google Maps & Sheets Coordinates**:")
+                st.code(clicked_coords, language="text")
+                
+                # Direct search link for google maps
+                gmaps_url = f"https://www.google.com/maps/search/?api=1&query={clicked_coords.replace(' ', '')}"
+                st.markdown(f"[🔗 View on Google Maps]({gmaps_url})")
+                
+                if st.button("Reset Selection", use_container_width=True, help="Clear map selection and go back to dropdown"):
+                    st.session_state.scoring_map = None
+                    st.rerun()
+            else:
+                st.caption("Click any point on the map, or select a location from the dropdown below to copy coordinates:")
+                # Dropdown of top 20 candidates
+                if "CombinedScore" in scores.columns:
+                    copy_opts = [
+                        f"Rank #{i+1}: {row['Lat']:.6f}, {row['Lon']:.6f} (Suitability: {row['CombinedScore']:.2f})"
+                        for i, row in scores.head(20).iterrows()
+                    ]
+                else:
+                    copy_opts = [
+                        f"Rank #{i+1}: {row['Lat']:.6f}, {row['Lon']:.6f} ({row['MatchRate']:.1%} match)"
+                        for i, row in scores.head(20).iterrows()
+                    ]
+                    
+                selected_opt = st.selectbox(
+                    "Select location to copy",
+                    copy_opts,
+                    label_visibility="visible",
+                    help="Select a location to easily copy its coordinates for pasting into Google Maps, Google Sheets, etc."
+                )
+                if selected_opt:
+                    # Extract the lat, lon
+                    coords_str = selected_opt.split(": ")[1].split(" (")[0]
+                    
+                    st.markdown("**Copy/Paste Coordinates**:")
+                    st.code(coords_str, language="text")
+                    st.caption("💡 Hover and click the **Copy icon** in the top-right of the box above to copy!")
+                    
+                    # Direct search link for google maps
+                    gmaps_url = f"https://www.google.com/maps/search/?api=1&query={coords_str.replace(' ', '')}"
+                    st.markdown(f"[🔗 View on Google Maps]({gmaps_url})")
+# ─── TAB 4: Diagnostics ──────────────────────────────────────────────────────
