@@ -450,6 +450,16 @@ with st.sidebar:
         switch_hunt(selected_hunt)
         st.rerun()
         
+    with st.expander("➕ Create New Hunt", expanded=False):
+        new_hunt_name = st.text_input("New Hunt Name", placeholder="e.g. veil_nine")
+        if st.button("Create", use_container_width=True) and new_hunt_name:
+            # Basic sanitization
+            new_hunt_clean = "".join(c for c in new_hunt_name if c.isalnum() or c in ("_", "-"))
+            if new_hunt_clean and new_hunt_clean not in hunts:
+                os.makedirs(os.path.join(HUNTS_DIR, new_hunt_clean), exist_ok=True)
+                switch_hunt(new_hunt_clean)
+                st.rerun()
+
     st.markdown("---")
     with st.expander("⚖️ Combined Score Weights", expanded=False):
         st.caption(
@@ -509,19 +519,9 @@ with st.sidebar:
                     save_settings(st.session_state.settings_cache)
                     st.rerun()
             st.markdown("---")
-    with st.expander("🗺️ Map Settings", expanded=False):
-        new_trans = st.slider("Point Transparency (%)", min_value=0, max_value=95, value=int(st.session_state.map_transparency), step=5, help="Make grid points semi-transparent to view roads and landmarks under them.")
-        if new_trans != st.session_state.map_transparency:
-            st.session_state.map_transparency = new_trans
-            st.rerun()
 
 # ─── Map View ──────────────────────────────────────────────────────────────
 st.header("Location Scoring Map")
-
-# Auto-select master parquet if not set
-if st.session_state.selected_csv is None:
-    if os.path.exists(get_master_parquet()):
-        st.session_state.selected_csv = get_master_parquet()
 
 fog_df = get_fog_df()
 if fog_df is None:

@@ -32,7 +32,7 @@ out.append("    st.markdown(\"# Veil Finder Mobile\")\n")
 out.append("    st.caption(\"Read-only field viewer\")\n")
 
 # 3. Hunt selector
-out.extend(extract_block(lines, '# ── Hunt Selector ──', 'with st.expander("➕ Create New Hunt", expanded=False):'))
+out.extend(extract_block(lines, '# ── Hunt Selector ──', 'st.markdown("---")'))
 out.append("    st.markdown(\"---\")\n")
 
 # 4. We want to skip satellite data upload, threshold setting, fog stats, grid settings, and plant addition.
@@ -62,22 +62,9 @@ out.append('                    save_settings(st.session_state.settings_cache)\n
 out.append('                    st.rerun()\n')
 out.append('            st.markdown("---")\n')
 
-# 5.5 Map Settings
-out.append('    with st.expander("🗺️ Map Settings", expanded=False):\n')
-out.append('        new_trans = st.slider("Point Transparency (%)", min_value=0, max_value=95, value=int(st.session_state.map_transparency), step=5, help="Make grid points semi-transparent to view roads and landmarks under them.")\n')
-out.append('        if new_trans != st.session_state.map_transparency:\n')
-out.append('            st.session_state.map_transparency = new_trans\n')
-out.append('            st.rerun()\n')
-
 # 6. Map View
 out.append("\n# ─── Map View ──────────────────────────────────────────────────────────────\n")
 out.append("st.header(\"Location Scoring Map\")\n\n")
-
-out.append("# Auto-select master parquet if not set\n")
-out.append("if st.session_state.selected_csv is None:\n")
-out.append("    if os.path.exists(get_master_parquet()):\n")
-out.append("        st.session_state.selected_csv = get_master_parquet()\n\n")
-
 out.append("fog_df = get_fog_df()\n")
 out.append("if fog_df is None:\n")
 out.append("    st.warning(\"No satellite data found for this hunt.\")\n")
