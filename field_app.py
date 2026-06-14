@@ -300,7 +300,7 @@ def recompute_combined(scores_df: pd.DataFrame) -> pd.DataFrame:
     else:
         combined = combined_raw * 0.0
 
-    df["CombinedScore"] = combined
+    df["CombinedScore"] = combined.fillna(0.0)
     return df.sort_values("CombinedScore", ascending=False).reset_index(drop=True)
 
 
@@ -344,14 +344,20 @@ def get_scores() -> pd.DataFrame | None:
                 base_scores = pd.DataFrame()
                 
                 if fog_df is not None and not fog_df.empty:
-                    fog_df_rounded = fog_df.copy()
-                    fog_df_rounded["Lat_g"] = fog_df_rounded["Lat"].round(4)
-                    fog_df_rounded["Lon_g"] = fog_df_rounded["Lon"].round(4)
+                    # Optimize memory: round Lat/Lon on the fly without duplicating the massive dataframe
+                    temp_grid = grid_df.copy()
                     
-                    # Score only points with data
-                    filtered_df = pd.merge(fog_df_rounded, grid_df, on=["Lat_g", "Lon_g"], how="inner")
+                    # Instead of an inner merge that duplicates data, we filter fog_df by checking if rounded coordinates are in the grid
+                    grid_set = set(zip(temp_grid["Lat_g"], temp_grid["Lon_g"]))
+                    
+                    fog_mask = pd.Series(list(zip(fog_df["Lat"].round(4), fog_df["Lon"].round(4)))).isin(grid_set)
+                    filtered_df = fog_df[fog_mask.values].copy()
+                    
+                    # Ensure Lat_g and Lon_g exist for the downstream logic
+                    filtered_df["Lat_g"] = filtered_df["Lat"].round(4)
+                    filtered_df["Lon_g"] = filtered_df["Lon"].round(4)
+                    
                     # Clean up the merge artifacts so score_all_observations sees exact Lat/Lon
-                    filtered_df = filtered_df.drop(columns=["Lat_g", "Lon_g"])
                     # Some merges create Lat_x, Lon_x if there's overlap. Let's explicitly ensure Lat, Lon are from fog_df
                     if "Lat_x" in filtered_df.columns:
                         filtered_df = filtered_df.rename(columns={"Lat_x": "Lat", "Lon_x": "Lon"})
