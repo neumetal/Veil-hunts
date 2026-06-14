@@ -32,7 +32,7 @@ out.append("    st.markdown(\"# Veil Finder Mobile\")\n")
 out.append("    st.caption(\"Read-only field viewer\")\n")
 
 # 3. Hunt selector
-out.extend(extract_block(lines, '# ── Hunt Selector ──', 'st.markdown("---")'))
+out.extend(extract_block(lines, '# ── Hunt Selector ──', 'with st.expander("➕ Create New Hunt", expanded=False):'))
 out.append("    st.markdown(\"---\")\n")
 
 # 4. We want to skip satellite data upload, threshold setting, fog stats, grid settings, and plant addition.

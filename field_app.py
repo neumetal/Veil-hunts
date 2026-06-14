@@ -444,16 +444,6 @@ with st.sidebar:
         switch_hunt(selected_hunt)
         st.rerun()
         
-    with st.expander("➕ Create New Hunt", expanded=False):
-        new_hunt_name = st.text_input("New Hunt Name", placeholder="e.g. veil_nine")
-        if st.button("Create", use_container_width=True) and new_hunt_name:
-            # Basic sanitization
-            new_hunt_clean = "".join(c for c in new_hunt_name if c.isalnum() or c in ("_", "-"))
-            if new_hunt_clean and new_hunt_clean not in hunts:
-                os.makedirs(os.path.join(HUNTS_DIR, new_hunt_clean), exist_ok=True)
-                switch_hunt(new_hunt_clean)
-                st.rerun()
-
     st.markdown("---")
     with st.expander("⚖️ Combined Score Weights", expanded=False):
         st.caption(
