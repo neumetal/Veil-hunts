@@ -777,31 +777,24 @@ st.caption("💡 Tap any grid point to load its coordinates. The 🔵 star = sel
 # on_select="rerun" already does one rerun; a second rerun resets the map viewport.
 # Plant pins will reflect the PREVIOUS click (one-tap lag), which is acceptable.
 clicked_coords = None
-clicked_lat = None
-clicked_lon = None
 if map_event and hasattr(map_event, "selection"):
     _sel = map_event.selection if isinstance(map_event.selection, dict) else {}
     _pts = _sel.get("points", [])
     if _pts:
         _pt = _pts[0]
         _curve = _pt.get("curveNumber", 0)
+        _lat = _pt.get("lat") or _pt.get("y")
+        _lon = _pt.get("lon") or _pt.get("x")
         
-        # Only accept clicks on the main grid points (curve 0)
-        if _curve == 0:
-            _lat = _pt.get("lat") or _pt.get("y")
-            _lon = _pt.get("lon") or _pt.get("x")
-            if _lat is not None and _lon is not None:
-                clicked_lat = float(_lat)
-                clicked_lon = float(_lon)
-                clicked_coords = f"{clicked_lat:.6f}, {clicked_lon:.6f}"
-                st.session_state.fa_clicked_lat = clicked_lat
-                st.session_state.fa_clicked_lon = clicked_lon
-        else:
-            # Tapped a plant pin (curve > 0) -> ignore it, keep previous state
-            clicked_lat = st.session_state.fa_clicked_lat
-            clicked_lon = st.session_state.fa_clicked_lon
-            if clicked_lat is not None and clicked_lon is not None:
-                clicked_coords = f"{clicked_lat:.6f}, {clicked_lon:.6f}"
+        if _lat is not None and _lon is not None:
+            # Always populate the coordinate copier with the exact point clicked (grid or plant)
+            clicked_coords = f"{float(_lat):.6f}, {float(_lon):.6f}"
+            
+            # ONLY update the map's active center if they clicked a grid point (curve 0)
+            # This prevents Plotly from regenerating traces and unclicking the plant pin!
+            if _curve == 0:
+                st.session_state.fa_clicked_lat = float(_lat)
+                st.session_state.fa_clicked_lon = float(_lon)
     else:
         # Empty selection = user tapped blank map area = deselect
         if st.session_state.fa_clicked_lat is not None:
