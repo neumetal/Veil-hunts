@@ -691,6 +691,9 @@ if st.session_state.plant_obs_dict:
         ]
         if _nearby:
             _odf = pd.DataFrame(_nearby)
+            # Ensure observed_on column exists (iNaturalist data may omit it)
+            if "observed_on" not in _odf.columns:
+                _odf["observed_on"] = ""
             _gmaps_links = _odf.apply(
                 lambda r: f"https://www.google.com/maps/search/?api=1&query={r['lat']:.6f},{r['lon']:.6f}",
                 axis=1,
@@ -700,13 +703,13 @@ if st.session_state.plant_obs_dict:
                 lon=_odf["lon"],
                 mode="markers",
                 marker=dict(size=11, color=_sp_color, symbol="circle"),
-                customdata=np.stack([
-                    _odf["user"],
-                    _odf.get("observed_on", pd.Series([""] * len(_odf))),
-                    _odf["lat"].map("{:.5f}".format),
-                    _odf["lon"].map("{:.5f}".format),
-                    _gmaps_links,
-                ], axis=-1),
+                customdata=np.column_stack([
+                    _odf["user"].astype(str).values,
+                    _odf["observed_on"].astype(str).values,
+                    _odf["lat"].map("{:.5f}".format).values,
+                    _odf["lon"].map("{:.5f}".format).values,
+                    _gmaps_links.values,
+                ]),
                 hovertemplate=(
                     f"<b>🌿 {_species}</b><br>"
                     "Observer: @%{customdata[0]}<br>"
