@@ -551,29 +551,18 @@ m4.metric("Fog Observations", n_fog_obs)
 
 st.markdown("---")
 
-# ── Candidate picker (above map so selection is reflected on next rerun) ────────
+# ── Pinned candidate (read from session state — selectbox is below the map) ─────
 if "fa_pin_idx" not in st.session_state:
     st.session_state.fa_pin_idx = 0
 
-_pin_opts = [
-    f"#{i+1}  {row['Lat']:.5f}, {row['Lon']:.5f}  (score {row.get('CombinedScore', row.get('MatchRate', 0)):.3f})"
-    for i, row in scores.head(20).iterrows()
-]
-_pin_sel = st.selectbox(
-    "📌 Highlight a candidate on the map",
-    options=_pin_opts,
-    index=min(st.session_state.fa_pin_idx, len(_pin_opts) - 1),
-    key="fa_pin_select",
-    help="Selecting a location here places a star marker on the map and loads its coordinates below.",
-)
-_pin_new_idx = _pin_opts.index(_pin_sel)
-if _pin_new_idx != st.session_state.fa_pin_idx:
-    st.session_state.fa_pin_idx = _pin_new_idx
-    st.rerun()
-_pinned_row = scores.iloc[st.session_state.fa_pin_idx]
+_pinned_row = scores.iloc[min(st.session_state.fa_pin_idx, len(scores) - 1)]
 _pinned_lat = float(_pinned_row["Lat"])
 _pinned_lon = float(_pinned_row["Lon"])
 _pinned_coords = f"{_pinned_lat:.6f}, {_pinned_lon:.6f}"
+
+# ── Score filter (read from session state — slider is below the map) ────────────
+if "fa_score_range" not in st.session_state:
+    st.session_state.fa_score_range = None
 
 # ── Build the map figure ────────────────────────────────────────────────────────
 alpha = 1.0 - (int(st.session_state.map_transparency) / 100.0)
@@ -583,48 +572,33 @@ map_df["MatchRate"] = map_df["MatchRate"].fillna(0.0)
 color_col = "CombinedScore" if "CombinedScore" in map_df.columns else "MatchRate"
 _max_score = float(map_df[color_col].max()) if map_df[color_col].notna().any() else 1.0
 
-# ── Score range filter + inline gradient legend ───────────────────────────
+# ── Apply score filter from session state ─────────────────────────────────────
 _fmin = float(map_df["CombinedScore"].min()) if "CombinedScore" in map_df.columns else 0.0
 _fmax = float(map_df["CombinedScore"].max()) if "CombinedScore" in map_df.columns else 1.0
 _fmax = _fmax if _fmax > _fmin else _fmin + 0.001
+_frange = st.session_state.fa_score_range or (round(_fmin, 3), round(_fmax, 3))
+# Clamp to current data bounds
+_frange = (max(float(_frange[0]), _fmin), min(float(_frange[1]), _fmax))
 
-# Gradient bar that mirrors SCORE_COLORSCALE, acts as the color legend
-st.markdown(f"""
+# Slim gradient bar — doubles as the legend for map colours
+st.markdown("""
 <div style="margin-bottom:2px;">
-  <span style="font-size:0.82rem;color:#8b949e;">Low</span>
-  <span style="font-size:0.82rem;color:#8b949e;float:right;">High</span>
+  <span style="font-size:0.78rem;color:#8b949e;">Low</span>
+  <span style="font-size:0.78rem;color:#8b949e;float:right;">High</span>
 </div>
-<div style="
-  height:12px;
-  border-radius:6px;
-  margin-bottom:6px;
-  background: linear-gradient(to right,
-    rgba(60,60,70,0.6) 0%,
-    rgba(60,60,70,0.6) 40%,
-    #e8c830 55%,
-    #ff7b00 72%,
-    #ff2800 88%,
-    #ff0055 100%
-  );
+<div style="height:8px;border-radius:4px;margin-bottom:4px;
+  background:linear-gradient(to right,
+    rgba(60,60,70,0.6) 0%,rgba(60,60,70,0.6) 40%,
+    #e8c830 55%,#ff7b00 72%,#ff2800 88%,#ff0055 100%);
 "></div>
 """, unsafe_allow_html=True)
 
-_frange = st.slider(
-    "Filter by Combined Score",
-    min_value=round(_fmin, 3),
-    max_value=round(_fmax, 3),
-    value=(round(_fmin, 3), round(_fmax, 3)),
-    step=round((_fmax - _fmin) / 200, 4) or 0.001,
-    help="Drag to hide points below or above a score threshold.",
-    key="fa_score_filter",
-    label_visibility="collapsed",
-)
 map_df = map_df[
     (map_df["CombinedScore"] >= _frange[0]) &
     (map_df["CombinedScore"] <= _frange[1])
 ]
 if map_df.empty:
-    st.warning("No points match the current score filter — try widening the range.")
+    st.warning("No points match the current score filter — try widening the range below.")
     st.stop()
 
 # Build hover text
@@ -803,7 +777,9 @@ map_event = st.plotly_chart(
 )
 st.caption("💡 Tap any grid point to load its coordinates. The 🔵 star = selected candidate.")
 
-# ── Extract click from event and persist in non-widget state ───────────────────
+# ── Extract click from event — NO extra st.rerun() so zoom is preserved ────────
+# on_select="rerun" already does one rerun; a second rerun resets the map viewport.
+# Plant pins will reflect the PREVIOUS click (one-tap lag), which is acceptable.
 clicked_coords = None
 clicked_lat = None
 clicked_lon = None
@@ -818,18 +794,20 @@ if map_event and hasattr(map_event, "selection"):
             clicked_lat = float(_lat)
             clicked_lon = float(_lon)
             clicked_coords = f"{clicked_lat:.6f}, {clicked_lon:.6f}"
-            # Persist so next rerun can draw plant pins before map renders
-            if (clicked_lat != st.session_state.fa_clicked_lat or
-                    clicked_lon != st.session_state.fa_clicked_lon):
-                st.session_state.fa_clicked_lat = clicked_lat
-                st.session_state.fa_clicked_lon = clicked_lon
-                st.rerun()
+            # Persist for next render's plant pins — no extra rerun
+            st.session_state.fa_clicked_lat = clicked_lat
+            st.session_state.fa_clicked_lon = clicked_lon
+    else:
+        # Empty selection = user tapped blank map area = deselect
+        if st.session_state.fa_clicked_lat is not None:
+            st.session_state.fa_clicked_lat = None
+            st.session_state.fa_clicked_lon = None
 
 st.markdown("---")
 
-# ══ COORDINATE COPIER (full width — most important on mobile) ══════════════════
+# ══ COORDINATE COPIER ══════════════════════════════════════════════════════════
 display_coords = clicked_coords if clicked_coords else _pinned_coords
-display_label  = "🎯 Map point selected!" if clicked_coords else f"📌 Candidate #{st.session_state.fa_pin_idx + 1}"
+display_label  = "🎯 Tapped!" if clicked_coords else f"📌 Candidate #{st.session_state.fa_pin_idx + 1}"
 
 st.success(display_label)
 st.code(display_coords, language="text")
@@ -837,12 +815,14 @@ st.code(display_coords, language="text")
 _gmaps = f"https://www.google.com/maps/search/?api=1&query={display_coords.replace(' ', '')}"
 st.markdown(f"[🔗 Open in Google Maps]({_gmaps})")
 
-if clicked_coords and st.button("✖ Clear map selection", use_container_width=True):
+# Clear button — visible whenever a point is stored (not just when actively clicked)
+_has_stored = st.session_state.fa_clicked_lat is not None
+if _has_stored and st.button("✖ Clear tap selection", use_container_width=True):
     st.session_state.fa_clicked_lat = None
     st.session_state.fa_clicked_lon = None
     st.rerun()
 
-# ── Nearby plant summary (below coords, stays compact) ────────────────────────
+# ── Nearby plant summary ────────────────────────────────────────────────────────
 if st.session_state.plant_obs_dict:
     _any_nearby = any(
         any(haversine_distance(_active_lat, _active_lon, o["lat"], o["lon"]) <= 3.0
@@ -892,3 +872,52 @@ st.dataframe(
         )
     },
 )
+
+st.markdown("---")
+
+# ══ SCORE FILTER & CANDIDATE PICKER (below map so they don't push map down) ══
+with st.expander("🎛️ Score Filter & Candidate Highlight", expanded=False):
+    st.caption("These update the map on the next interaction without zooming out.")
+
+    # Score range slider
+    _s_fmin = float(scores["CombinedScore"].min()) if "CombinedScore" in scores.columns else 0.0
+    _s_fmax = float(scores["CombinedScore"].max()) if "CombinedScore" in scores.columns else 1.0
+    _s_fmax = _s_fmax if _s_fmax > _s_fmin else _s_fmin + 0.001
+    _cur_range = st.session_state.fa_score_range or (round(_s_fmin, 3), round(_s_fmax, 3))
+    _cur_range = (max(float(_cur_range[0]), _s_fmin), min(float(_cur_range[1]), _s_fmax))
+
+    _new_frange = st.slider(
+        "Filter by Combined Score",
+        min_value=round(_s_fmin, 3),
+        max_value=round(_s_fmax, 3),
+        value=_cur_range,
+        step=round((_s_fmax - _s_fmin) / 200, 4) or 0.001,
+        help="Drag to hide low or high scoring points on the map.",
+        key="fa_score_filter_below",
+    )
+    if _new_frange != tuple(st.session_state.fa_score_range or ()):
+        st.session_state.fa_score_range = _new_frange
+        st.rerun()
+
+    if st.button("Reset score filter", use_container_width=True, key="fa_reset_filter"):
+        st.session_state.fa_score_range = None
+        st.rerun()
+
+    st.markdown("---")
+
+    # Candidate picker
+    _pin_opts = [
+        f"#{i+1}  {row['Lat']:.5f}, {row['Lon']:.5f}  (score {row.get('CombinedScore', row.get('MatchRate', 0)):.3f})"
+        for i, row in scores.head(20).iterrows()
+    ]
+    _pin_sel = st.selectbox(
+        "📌 Highlight candidate on map",
+        options=_pin_opts,
+        index=min(st.session_state.fa_pin_idx, len(_pin_opts) - 1),
+        key="fa_pin_select",
+        help="Places a ⭐ marker on the map at this candidate's location.",
+    )
+    _pin_new_idx = _pin_opts.index(_pin_sel)
+    if _pin_new_idx != st.session_state.fa_pin_idx:
+        st.session_state.fa_pin_idx = _pin_new_idx
+        st.rerun()
