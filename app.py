@@ -1264,6 +1264,28 @@ with tab3:
             map_df["_size"] = (map_df[color_col].fillna(0) * 15).clip(lower=1.5)
             map_df["MatchRate_pct"] = (map_df["MatchRate"] * 100).round(1)
 
+            # ── Score range filter ─────────────────────────────────────────────
+            _score_min = float(map_df["CombinedScore"].min()) if "CombinedScore" in map_df.columns else 0.0
+            _score_max = float(map_df["CombinedScore"].max()) if "CombinedScore" in map_df.columns else 1.0
+            _score_max = _score_max if _score_max > _score_min else _score_min + 0.001
+
+            _filter_range = st.slider(
+                "Filter by Combined Score",
+                min_value=round(_score_min, 3),
+                max_value=round(_score_max, 3),
+                value=(round(_score_min, 3), round(_score_max, 3)),
+                step=round((_score_max - _score_min) / 200, 4) or 0.001,
+                help="Hide grid points outside this score range. Drag either end to focus the map.",
+                key="score_range_filter",
+            )
+            map_df = map_df[
+                (map_df["CombinedScore"] >= _filter_range[0]) &
+                (map_df["CombinedScore"] <= _filter_range[1])
+            ]
+            if map_df.empty:
+                st.warning("No points match the current score filter — try widening the range.")
+                st.stop()
+
             # Dynamic map center and zoom level based on user's active grid settings
             map_center = {
                 "lat": st.session_state.grid_center_lat,

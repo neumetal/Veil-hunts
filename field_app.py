@@ -441,6 +441,28 @@ map_df["MatchRate"] = map_df["MatchRate"].fillna(0.0)
 color_col = "CombinedScore" if "CombinedScore" in map_df.columns else "MatchRate"
 _max_score = float(map_df[color_col].max()) if map_df[color_col].notna().any() else 1.0
 
+# ── Score range filter ─────────────────────────────────────────────────────────
+_fmin = float(map_df["CombinedScore"].min()) if "CombinedScore" in map_df.columns else 0.0
+_fmax = float(map_df["CombinedScore"].max()) if "CombinedScore" in map_df.columns else 1.0
+_fmax = _fmax if _fmax > _fmin else _fmin + 0.001
+
+_frange = st.slider(
+    "Filter by Combined Score",
+    min_value=round(_fmin, 3),
+    max_value=round(_fmax, 3),
+    value=(round(_fmin, 3), round(_fmax, 3)),
+    step=round((_fmax - _fmin) / 200, 4) or 0.001,
+    help="Hide grid points outside this score range. Drag either end to focus the map.",
+    key="fa_score_filter",
+)
+map_df = map_df[
+    (map_df["CombinedScore"] >= _frange[0]) &
+    (map_df["CombinedScore"] <= _frange[1])
+]
+if map_df.empty:
+    st.warning("No points match the current score filter — try widening the range.")
+    st.stop()
+
 # Build hover text
 def make_hover(row):
     parts = [
