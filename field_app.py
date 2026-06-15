@@ -583,10 +583,31 @@ map_df["MatchRate"] = map_df["MatchRate"].fillna(0.0)
 color_col = "CombinedScore" if "CombinedScore" in map_df.columns else "MatchRate"
 _max_score = float(map_df[color_col].max()) if map_df[color_col].notna().any() else 1.0
 
-# ── Score range filter ─────────────────────────────────────────────────────────
+# ── Score range filter + inline gradient legend ───────────────────────────
 _fmin = float(map_df["CombinedScore"].min()) if "CombinedScore" in map_df.columns else 0.0
 _fmax = float(map_df["CombinedScore"].max()) if "CombinedScore" in map_df.columns else 1.0
 _fmax = _fmax if _fmax > _fmin else _fmin + 0.001
+
+# Gradient bar that mirrors SCORE_COLORSCALE, acts as the color legend
+st.markdown(f"""
+<div style="margin-bottom:2px;">
+  <span style="font-size:0.82rem;color:#8b949e;">Low</span>
+  <span style="font-size:0.82rem;color:#8b949e;float:right;">High</span>
+</div>
+<div style="
+  height:12px;
+  border-radius:6px;
+  margin-bottom:6px;
+  background: linear-gradient(to right,
+    rgba(60,60,70,0.6) 0%,
+    rgba(60,60,70,0.6) 40%,
+    #e8c830 55%,
+    #ff7b00 72%,
+    #ff2800 88%,
+    #ff0055 100%
+  );
+"></div>
+""", unsafe_allow_html=True)
 
 _frange = st.slider(
     "Filter by Combined Score",
@@ -594,8 +615,9 @@ _frange = st.slider(
     max_value=round(_fmax, 3),
     value=(round(_fmin, 3), round(_fmax, 3)),
     step=round((_fmax - _fmin) / 200, 4) or 0.001,
-    help="Hide grid points outside this score range. Drag either end to focus the map.",
+    help="Drag to hide points below or above a score threshold.",
     key="fa_score_filter",
+    label_visibility="collapsed",
 )
 map_df = map_df[
     (map_df["CombinedScore"] >= _frange[0]) &
