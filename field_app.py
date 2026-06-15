@@ -55,15 +55,99 @@ st.set_page_config(
 )
 st.markdown("""
 <style>
-  .block-container { padding-top: 3.5rem; padding-bottom: 2rem; }
-  div[data-testid="stMetric"] {
-      background: #161b22; border: 1px solid #30363d;
-      border-radius: 8px; padding: 0.6rem 1rem;
+  /* ── Mobile-first base ─────────────────────────────────────── */
+  html, body { touch-action: manipulation; }
+
+  .block-container {
+      padding-top: 2rem;
+      padding-bottom: 4rem;
+      padding-left: 0.75rem !important;
+      padding-right: 0.75rem !important;
+      max-width: 100% !important;
   }
-  div[data-testid="stMetricValue"] { font-size: 1.5rem; }
-  div[data-testid="stDataFrame"] { border: 1px solid #30363d; border-radius: 8px; }
-  .stAlert { border-radius: 8px; }
-  hr { border-color: #30363d; margin: 1.2rem 0; }
+
+  /* ── Typography — readable outdoors ───────────────────────── */
+  html { font-size: 16px; }
+  p, li, .stCaption, label { font-size: 1rem !important; line-height: 1.55; }
+  h1 { font-size: 1.6rem !important; }
+  h2 { font-size: 1.3rem !important; }
+  h3 { font-size: 1.1rem !important; }
+
+  /* ── Touch-friendly buttons ─────────────────────────────────── */
+  .stButton > button {
+      min-height: 52px !important;
+      font-size: 1rem !important;
+      border-radius: 10px !important;
+      width: 100% !important;
+  }
+
+  /* ── Touch-friendly sliders ─────────────────────────────────── */
+  div[data-testid="stSlider"] > div { padding-top: 0.5rem; padding-bottom: 0.5rem; }
+  div[data-testid="stSlider"] span[data-testid="stThumbValue"] { font-size: 1rem !important; }
+
+  /* ── Bigger selectbox / radio ───────────────────────────────── */
+  div[data-testid="stSelectbox"] select,
+  div[data-baseweb="select"] { min-height: 48px !important; font-size: 1rem !important; }
+  div[data-testid="stRadio"] label { font-size: 1rem !important; padding: 0.4rem 0; }
+
+  /* ── Metric cards ───────────────────────────────────────────── */
+  div[data-testid="stMetric"] {
+      background: #161b22;
+      border: 1px solid #30363d;
+      border-radius: 10px;
+      padding: 0.7rem 1rem;
+  }
+  div[data-testid="stMetricValue"] { font-size: 1.4rem !important; }
+  div[data-testid="stMetricLabel"] { font-size: 0.8rem !important; }
+
+  /* ── Data table ─────────────────────────────────────────────── */
+  div[data-testid="stDataFrame"] {
+      border: 1px solid #30363d;
+      border-radius: 10px;
+      overflow-x: auto;
+      -webkit-overflow-scrolling: touch;
+  }
+
+  /* ── Alert / info boxes ─────────────────────────────────────── */
+  .stAlert { border-radius: 10px; }
+
+  /* ── Success / code box for coords ─────────────────────────── */
+  .stSuccess { font-size: 1.1rem !important; }
+  div[data-testid="stCode"] {
+      font-size: 1.15rem !important;
+      border-radius: 10px;
+      letter-spacing: 0.04em;
+  }
+
+  /* ── Google Maps link — make it a big tap target ────────────── */
+  a[href*="google.com/maps"] {
+      display: inline-block;
+      background: #1a7f37;
+      color: #fff !important;
+      padding: 0.75rem 1.4rem;
+      border-radius: 10px;
+      font-size: 1.05rem;
+      font-weight: 600;
+      text-decoration: none;
+      margin-top: 0.5rem;
+  }
+  a[href*="google.com/maps"]:hover { background: #238f40; }
+
+  /* ── Sidebar ─────────────────────────────────────────────────── */
+  section[data-testid="stSidebar"] { min-width: 270px !important; }
+  section[data-testid="stSidebar"] .stButton > button { min-height: 48px !important; }
+
+  /* ── Horizontal rule ────────────────────────────────────────── */
+  hr { border-color: #30363d; margin: 1.4rem 0; }
+
+  /* ── Expander headers ─────────────────────────────────────── */
+  div[data-testid="stExpander"] summary {
+      font-size: 1rem !important;
+      padding: 0.6rem 0;
+  }
+
+  /* ── Prevent table overflow on narrow screens ─────────────── */
+  .element-container { max-width: 100% !important; }
 </style>
 """, unsafe_allow_html=True)
 
@@ -698,7 +782,7 @@ map_event = st.plotly_chart(
     on_select="rerun",
     key="field_map_v2",
 )
-st.caption("💡 Click any grid point to show nearby plant pins and load coordinates. The 🔵 star marks your selected candidate.")
+st.caption("💡 Tap any grid point to load its coordinates. The 🔵 star = selected candidate.")
 
 # ── Extract click from event and persist in non-widget state ───────────────────
 clicked_coords = None
@@ -723,67 +807,69 @@ if map_event and hasattr(map_event, "selection"):
                 st.rerun()
 
 st.markdown("---")
-col_tbl, col_cpy = st.columns([2.5, 1.5])
 
-with col_tbl:
-    st.subheader("Top 20 Candidate Locations")
-    show_cols = ["Lat", "Lon"]
-    if "Elevation_m" in scores.columns:
-        show_cols += ["Elevation_m"]
-    if "IsValley" in scores.columns:
-        show_cols += ["IsValley"]
-    show_cols += ["MatchRate"]
-    if "CombinedScore" in scores.columns:
-        show_cols += ["CombinedScore"]
+# ══ COORDINATE COPIER (full width — most important on mobile) ══════════════════
+display_coords = clicked_coords if clicked_coords else _pinned_coords
+display_label  = "🎯 Map point selected!" if clicked_coords else f"📌 Candidate #{st.session_state.fa_pin_idx + 1}"
 
-    top20 = scores.head(20)[show_cols].copy()
-    top20.insert(0, "Rank", range(1, len(top20) + 1))
-    # Build full Google Maps URLs so LinkColumn renders them as clickable links
-    top20["Google Maps"] = top20.apply(
-        lambda r: f"https://www.google.com/maps/search/?api=1&query={float(r['Lat']):.6f},{float(r['Lon']):.6f}",
-        axis=1,
+st.success(display_label)
+st.code(display_coords, language="text")
+
+_gmaps = f"https://www.google.com/maps/search/?api=1&query={display_coords.replace(' ', '')}"
+st.markdown(f"[🔗 Open in Google Maps]({_gmaps})")
+
+if clicked_coords and st.button("✖ Clear map selection", use_container_width=True):
+    st.session_state.fa_clicked_lat = None
+    st.session_state.fa_clicked_lon = None
+    st.rerun()
+
+# ── Nearby plant summary (below coords, stays compact) ────────────────────────
+if st.session_state.plant_obs_dict:
+    _any_nearby = any(
+        any(haversine_distance(_active_lat, _active_lon, o["lat"], o["lon"]) <= 3.0
+            for o in _obs)
+        for _obs in st.session_state.plant_obs_dict.values()
     )
-    top20["MatchRate"] = top20["MatchRate"].map("{:.1%}".format)
-    if "Elevation_m" in top20.columns:
-        top20["Elevation_m"] = top20["Elevation_m"].map("{:.0f} m".format)
-    if "CombinedScore" in top20.columns:
-        top20["CombinedScore"] = top20["CombinedScore"].map("{:.3f}".format)
-    st.dataframe(
-        top20,
-        use_container_width=True,
-        hide_index=True,
-        column_config={
-            "Google Maps": st.column_config.LinkColumn(
-                "Google Maps",
-                display_text="🔗 Open",
-            )
-        },
-    )
-
-with col_cpy:
-    st.subheader("📍 Coordinate Copier")
-    # Show clicked map point if available, otherwise show pinned candidate
-    display_coords = clicked_coords if clicked_coords else _pinned_coords
-    display_label  = "🎯 Map Point Selected!" if clicked_coords else f"📌 Candidate #{st.session_state.fa_pin_idx + 1}"
-
-    st.success(display_label)
-    st.code(display_coords, language="text")
-    st.caption("Paste directly into Google Maps or Sheets.")
-    _gmaps = f"https://www.google.com/maps/search/?api=1&query={display_coords.replace(' ', '')}"
-    st.markdown(f"[🔗 Open in Google Maps]({_gmaps})")
-
-    if clicked_coords and st.button("Clear map selection"):
-        st.session_state.fa_clicked_lat = None
-        st.session_state.fa_clicked_lon = None
-        st.rerun()
-
-    if st.session_state.plant_obs_dict:
-        st.markdown("---")
-        st.caption("🌿 **Nearby plants** (within 3 mi of selected point):")
+    if _any_nearby:
+        st.markdown("**🌿 Nearby species (within 3 mi):**")
         for _sp, _obs in st.session_state.plant_obs_dict.items():
-            _nearby_count = sum(
+            _nc = sum(
                 1 for o in _obs
                 if haversine_distance(_active_lat, _active_lon, o["lat"], o["lon"]) <= 3.0
             )
-            if _nearby_count:
-                st.markdown(f"- **{_sp}**: {_nearby_count} observations")
+            if _nc:
+                st.markdown(f"- **{_sp}**: {_nc} observations")
+
+st.markdown("---")
+
+# ══ TOP CANDIDATES TABLE (below coords — secondary on mobile) ══════════════════
+st.subheader("Top 20 Candidate Locations")
+show_cols = ["Lat", "Lon"]
+if "Elevation_m" in scores.columns:
+    show_cols += ["Elevation_m"]
+show_cols += ["MatchRate"]
+if "CombinedScore" in scores.columns:
+    show_cols += ["CombinedScore"]
+
+top20 = scores.head(20)[show_cols].copy()
+top20.insert(0, "Rank", range(1, len(top20) + 1))
+top20["Google Maps"] = top20.apply(
+    lambda r: f"https://www.google.com/maps/search/?api=1&query={float(r['Lat']):.6f},{float(r['Lon']):.6f}",
+    axis=1,
+)
+top20["MatchRate"] = top20["MatchRate"].map("{:.1%}".format)
+if "Elevation_m" in top20.columns:
+    top20["Elevation_m"] = top20["Elevation_m"].map("{:.0f} m".format)
+if "CombinedScore" in top20.columns:
+    top20["CombinedScore"] = top20["CombinedScore"].map("{:.3f}".format)
+st.dataframe(
+    top20,
+    use_container_width=True,
+    hide_index=True,
+    column_config={
+        "Google Maps": st.column_config.LinkColumn(
+            "Google Maps",
+            display_text="🔗 Open",
+        )
+    },
+)
