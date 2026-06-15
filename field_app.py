@@ -785,16 +785,8 @@ fig.update_layout(
     paper_bgcolor="#0d1117",
     plot_bgcolor="#0d1117",
     margin=dict(l=0, r=0, t=0, b=0),
-    coloraxis_colorbar=dict(
-        title=dict(text="Score", font=dict(color="#e6edf3")),
-        tickformat=".2f",
-        len=0.55,
-        bgcolor="#161b22",
-        bordercolor="#30363d",
-        borderwidth=1,
-        tickfont=dict(color="#e6edf3"),
-    ),
 )
+fig.update_coloraxes(showscale=False)  # hide vertical colorbar — gradient above slider is the legend
 
 # ── Render map ────────────────────────────────────────────────────────────────
 map_event = st.plotly_chart(
