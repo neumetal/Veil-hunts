@@ -143,6 +143,8 @@ if "weight_contrast" not in st.session_state:
     st.session_state.weight_contrast = 10
 if "fog_threshold" not in st.session_state:
     st.session_state.fog_threshold = 5
+if "plant_match_mode" not in st.session_state:
+    st.session_state.plant_match_mode = "Any"
 if "scores" not in st.session_state:
     st.session_state.scores = None
 if "map_overlays" not in st.session_state:
@@ -269,7 +271,7 @@ def get_scores():
             base_scores,
             st.session_state.plant_obs_dict,
             influence_radius_mi=3.0,
-            match_mode="Any",
+            match_mode=st.session_state.plant_match_mode,
         )
         base_scores = score_cloud_observations(
             base_scores, st.session_state.cloud_obs_list, fog_df
@@ -350,6 +352,37 @@ with st.sidebar:
 
         if _changed:
             st.rerun()
+
+    # ── Fog threshold ──────────────────────────────────────────────────────────
+    with st.expander("🌫️ Fog Threshold", expanded=False):
+        _thresh_choice = st.radio(
+            "Fog detection threshold",
+            ["Moderate  (Score >= 5)", "Confirmed  (Score >= 10)"],
+            index=0 if st.session_state.fog_threshold == 5 else 1,
+            key="fa_thresh",
+            label_visibility="collapsed",
+        )
+        _new_thresh = 5 if "5" in _thresh_choice else 10
+        if _new_thresh != st.session_state.fog_threshold:
+            st.session_state.fog_threshold = _new_thresh
+            invalidate_scores()
+            st.rerun()
+
+    # ── Plant match mode ───────────────────────────────────────────────────────
+    if st.session_state.plant_obs_dict and len(st.session_state.plant_obs_dict) > 1:
+        with st.expander("🌿 Plant Match Strategy", expanded=False):
+            _match_choice = st.radio(
+                "Plant match mode",
+                ["Match Any (Either plant is nearby)", "Match All (All plants must be nearby)"],
+                index=0 if st.session_state.plant_match_mode == "Any" else 1,
+                key="fa_match_mode",
+                label_visibility="collapsed",
+            )
+            _new_mode = "Any" if "Any" in _match_choice else "All"
+            if _new_mode != st.session_state.plant_match_mode:
+                st.session_state.plant_match_mode = _new_mode
+                invalidate_scores()
+                st.rerun()
 
     # ── Map display settings ───────────────────────────────────────────────────
     with st.expander("🗺️ Map Settings", expanded=False):
