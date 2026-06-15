@@ -31,5 +31,27 @@
     "pct_clear": 15.1,
     "pct_cloudy": 61.6,
     "created_at": "2026-06-09T23:18:29.144582"
+  },
+  {
+    "id": "33f250b6-0514-40f3-8681-e9d0c4dfd2dd",
+    "date": "2026-06-09",
+    "window": "12PM-3PM",
+    "trailcam_condition": "Sunny",
+    "notes": "",
+    "spread": 100.0,
+    "pct_clear": 56.5,
+    "pct_cloudy": 15.6,
+    "created_at": "2026-06-15T11:00:35.348258"
+  },
+  {
+    "id": "3c6fa935-6306-4128-9f8a-d399455a6bed",
+    "date": "2026-06-12",
+    "window": "9AM-12PM",
+    "trailcam_condition": "Sunny",
+    "notes": "",
+    "spread": 99.3,
+    "pct_clear": 42.5,
+    "pct_cloudy": 11.4,
+    "created_at": "2026-06-15T11:02:06.956210"
   }
 ]
