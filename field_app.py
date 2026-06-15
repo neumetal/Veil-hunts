@@ -660,31 +660,26 @@ if st.session_state.plant_obs_dict:
     _plant_colors = px.colors.qualitative.Plotly
     for _pidx, (_species, _obs_list) in enumerate(st.session_state.plant_obs_dict.items()):
         _sp_color = _plant_colors[_pidx % len(_plant_colors)]
-        _nearby = [
-            o for o in _obs_list
-            if haversine_distance(_active_lat, _active_lon, o["lat"], o["lon"]) <= 3.0
-        ]
-        
-        # ALWAYS add trace (even if empty) so Plotly doesn't change trace count and reset zoom
-        _odf = pd.DataFrame(_nearby) if _nearby else pd.DataFrame(columns=["lat", "lon", "user", "observed_on"])
+        # Hold lat/lon arrays completely constant across reruns to prevent Plotly from resetting zoom
+        _odf = pd.DataFrame(_obs_list)
         if "observed_on" not in _odf.columns:
             _odf["observed_on"] = ""
             
-        if not _odf.empty:
-            _cdata = np.column_stack([
-                _odf["user"].astype(str).values,
-                _odf["observed_on"].astype(str).values,
-                _odf["lat"].map("{:.5f}".format).values,
-                _odf["lon"].map("{:.5f}".format).values,
-            ])
-        else:
-            _cdata = np.empty((0, 4))
+        _dists = _odf.apply(lambda r: haversine_distance(_active_lat, _active_lon, r["lat"], r["lon"]), axis=1)
+        _sizes = np.where(_dists <= 3.0, 11, 0)
+        
+        _cdata = np.column_stack([
+            _odf["user"].astype(str).values,
+            _odf["observed_on"].astype(str).values,
+            _odf["lat"].map("{:.5f}".format).values,
+            _odf["lon"].map("{:.5f}".format).values,
+        ])
             
         fig.add_trace(go.Scattermapbox(
-            lat=_odf["lat"] if not _odf.empty else [],
-            lon=_odf["lon"] if not _odf.empty else [],
+            lat=_odf["lat"],
+            lon=_odf["lon"],
             mode="markers",
-            marker=dict(size=11, color=_sp_color, symbol="circle"),
+            marker=dict(size=_sizes, color=_sp_color, symbol="circle"),
             customdata=_cdata,
             hovertemplate=(
                 f"<b>🌿 {_species}</b><br>"
@@ -789,15 +784,24 @@ if map_event and hasattr(map_event, "selection"):
     _pts = _sel.get("points", [])
     if _pts:
         _pt = _pts[0]
-        _lat = _pt.get("lat") or _pt.get("y")
-        _lon = _pt.get("lon") or _pt.get("x")
-        if _lat is not None and _lon is not None:
-            clicked_lat = float(_lat)
-            clicked_lon = float(_lon)
-            clicked_coords = f"{clicked_lat:.6f}, {clicked_lon:.6f}"
-            # Persist for next render's plant pins — no extra rerun
-            st.session_state.fa_clicked_lat = clicked_lat
-            st.session_state.fa_clicked_lon = clicked_lon
+        _curve = _pt.get("curveNumber", 0)
+        
+        # Only accept clicks on the main grid points (curve 0)
+        if _curve == 0:
+            _lat = _pt.get("lat") or _pt.get("y")
+            _lon = _pt.get("lon") or _pt.get("x")
+            if _lat is not None and _lon is not None:
+                clicked_lat = float(_lat)
+                clicked_lon = float(_lon)
+                clicked_coords = f"{clicked_lat:.6f}, {clicked_lon:.6f}"
+                st.session_state.fa_clicked_lat = clicked_lat
+                st.session_state.fa_clicked_lon = clicked_lon
+        else:
+            # Tapped a plant pin (curve > 0) -> ignore it, keep previous state
+            clicked_lat = st.session_state.fa_clicked_lat
+            clicked_lon = st.session_state.fa_clicked_lon
+            if clicked_lat is not None and clicked_lon is not None:
+                clicked_coords = f"{clicked_lat:.6f}, {clicked_lon:.6f}"
     else:
         # Empty selection = user tapped blank map area = deselect
         if st.session_state.fa_clicked_lat is not None:
