@@ -664,37 +664,37 @@ if st.session_state.plant_obs_dict:
             o for o in _obs_list
             if haversine_distance(_active_lat, _active_lon, o["lat"], o["lon"]) <= 3.0
         ]
-        if _nearby:
-            _odf = pd.DataFrame(_nearby)
-            # Ensure observed_on column exists (iNaturalist data may omit it)
-            if "observed_on" not in _odf.columns:
-                _odf["observed_on"] = ""
-            _gmaps_links = _odf.apply(
-                lambda r: f"https://www.google.com/maps/search/?api=1&query={r['lat']:.6f},{r['lon']:.6f}",
-                axis=1,
-            )
-            fig.add_trace(go.Scattermapbox(
-                lat=_odf["lat"],
-                lon=_odf["lon"],
-                mode="markers",
-                marker=dict(size=11, color=_sp_color, symbol="circle"),
-                customdata=np.column_stack([
-                    _odf["user"].astype(str).values,
-                    _odf["observed_on"].astype(str).values,
-                    _odf["lat"].map("{:.5f}".format).values,
-                    _odf["lon"].map("{:.5f}".format).values,
-                    _gmaps_links.values,
-                ]),
-                hovertemplate=(
-                    f"<b>🌿 {_species}</b><br>"
-                    "Observer: @%{customdata[0]}<br>"
-                    "Date: %{customdata[1]}<br>"
-                    "Location: %{customdata[2]}, %{customdata[3]}<br>"
-                    "<a href='%{customdata[4]}'>🔗 Google Maps</a>"
-                    "<extra></extra>"
-                ),
-                name=f"{_species} (nearby)",
-            ))
+        
+        # ALWAYS add trace (even if empty) so Plotly doesn't change trace count and reset zoom
+        _odf = pd.DataFrame(_nearby) if _nearby else pd.DataFrame(columns=["lat", "lon", "user", "observed_on"])
+        if "observed_on" not in _odf.columns:
+            _odf["observed_on"] = ""
+            
+        if not _odf.empty:
+            _cdata = np.column_stack([
+                _odf["user"].astype(str).values,
+                _odf["observed_on"].astype(str).values,
+                _odf["lat"].map("{:.5f}".format).values,
+                _odf["lon"].map("{:.5f}".format).values,
+            ])
+        else:
+            _cdata = np.empty((0, 4))
+            
+        fig.add_trace(go.Scattermapbox(
+            lat=_odf["lat"] if not _odf.empty else [],
+            lon=_odf["lon"] if not _odf.empty else [],
+            mode="markers",
+            marker=dict(size=11, color=_sp_color, symbol="circle"),
+            customdata=_cdata,
+            hovertemplate=(
+                f"<b>🌿 {_species}</b><br>"
+                "Observer: @%{customdata[0]}<br>"
+                "Date: %{customdata[1]}<br>"
+                "Location: %{customdata[2]}, %{customdata[3]}"
+                "<extra></extra>"
+            ),
+            name=f"{_species} (nearby)",
+        ))
 
 # ── Star marker for selected/pinned candidate ──────────────────────────────────
 fig.add_trace(go.Scattermapbox(
@@ -833,12 +833,19 @@ if st.session_state.plant_obs_dict:
     if _any_nearby:
         st.markdown("**🌿 Nearby species (within 3 mi):**")
         for _sp, _obs in st.session_state.plant_obs_dict.items():
-            _nc = sum(
-                1 for o in _obs
+            _nearby_obs = [
+                o for o in _obs
                 if haversine_distance(_active_lat, _active_lon, o["lat"], o["lon"]) <= 3.0
-            )
-            if _nc:
-                st.markdown(f"- **{_sp}**: {_nc} observations")
+            ]
+            if _nearby_obs:
+                st.markdown(f"- **{_sp}**: {len(_nearby_obs)} observations")
+                with st.expander(f"📍 View Google Maps links for {_sp}"):
+                    # Sort by distance to active point
+                    _nearby_obs.sort(key=lambda o: haversine_distance(_active_lat, _active_lon, o["lat"], o["lon"]))
+                    for o in _nearby_obs:
+                        _gmap = f"https://www.google.com/maps/search/?api=1&query={o['lat']:.6f},{o['lon']:.6f}"
+                        _dist = haversine_distance(_active_lat, _active_lon, o["lat"], o["lon"])
+                        st.markdown(f"[{o['lat']:.5f}, {o['lon']:.5f} ({_dist:.1f}mi away)]({_gmap})  — Observer: @{o.get('user', 'unknown')}")
 
 st.markdown("---")
 
