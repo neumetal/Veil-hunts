@@ -785,8 +785,10 @@ fig.update_layout(
     paper_bgcolor="#0d1117",
     plot_bgcolor="#0d1117",
     margin=dict(l=0, r=0, t=0, b=0),
+    showlegend=False,  # hide trace legend (plant species names) — it eats map width
 )
 fig.update_coloraxes(showscale=False)  # hide vertical colorbar — gradient above slider is the legend
+
 
 # ── Render map ────────────────────────────────────────────────────────────────
 map_event = st.plotly_chart(
