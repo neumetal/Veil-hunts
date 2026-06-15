@@ -28,6 +28,7 @@ from scorer import (
     compute_plant_scores,
     score_cloud_observations,
     score_contrast_observations,
+    haversine_distance,
 )
 from fetcher import load_master_csv
 from grid_utils import generate_grid
@@ -433,6 +434,30 @@ m4.metric("Fog Observations", n_fog_obs)
 
 st.markdown("---")
 
+# ── Candidate picker (above map so selection is reflected on next rerun) ────────
+if "fa_pin_idx" not in st.session_state:
+    st.session_state.fa_pin_idx = 0
+
+_pin_opts = [
+    f"#{i+1}  {row['Lat']:.5f}, {row['Lon']:.5f}  (score {row.get('CombinedScore', row.get('MatchRate', 0)):.3f})"
+    for i, row in scores.head(20).iterrows()
+]
+_pin_sel = st.selectbox(
+    "📌 Highlight a candidate on the map",
+    options=_pin_opts,
+    index=min(st.session_state.fa_pin_idx, len(_pin_opts) - 1),
+    key="fa_pin_select",
+    help="Selecting a location here places a star marker on the map and loads its coordinates below.",
+)
+_pin_new_idx = _pin_opts.index(_pin_sel)
+if _pin_new_idx != st.session_state.fa_pin_idx:
+    st.session_state.fa_pin_idx = _pin_new_idx
+    st.rerun()
+_pinned_row = scores.iloc[st.session_state.fa_pin_idx]
+_pinned_lat = float(_pinned_row["Lat"])
+_pinned_lon = float(_pinned_row["Lon"])
+_pinned_coords = f"{_pinned_lat:.6f}, {_pinned_lon:.6f}"
+
 # ── Build the map figure ────────────────────────────────────────────────────────
 alpha = 1.0 - (int(st.session_state.map_transparency) / 100.0)
 map_df = scores.copy()
@@ -501,6 +526,93 @@ fig.update_traces(
     marker=dict(size=7),
 )
 
+# ── Extract clicked map point ──────────────────────────────────────────────────
+# (Must be extracted before the map renders so plant pins can be added to fig)
+if "field_map_v2" not in st.session_state:
+    st.session_state.field_map_v2 = None
+
+_map_state = st.session_state.get("field_map_v2")
+_clicked_lat = None
+_clicked_lon = None
+if _map_state and isinstance(_map_state, dict):
+    _pts = _map_state.get("selection", {}).get("points", [])
+    if _pts:
+        _pt = _pts[0]
+        _lat = _pt.get("lat") or _pt.get("y")
+        _lon = _pt.get("lon") or _pt.get("x")
+        if _lat is not None and _lon is not None:
+            _clicked_lat = float(_lat)
+            _clicked_lon = float(_lon)
+
+# Use whichever is set: map click > pinned candidate
+_active_lat = _clicked_lat if _clicked_lat is not None else _pinned_lat
+_active_lon = _clicked_lon if _clicked_lon is not None else _pinned_lon
+
+# ── Plant observation pins ─────────────────────────────────────────────────────
+if st.session_state.plant_obs_dict:
+    _plant_colors = px.colors.qualitative.Plotly
+    for _pidx, (_species, _obs_list) in enumerate(st.session_state.plant_obs_dict.items()):
+        _sp_color = _plant_colors[_pidx % len(_plant_colors)]
+        _nearby = [
+            o for o in _obs_list
+            if haversine_distance(_active_lat, _active_lon, o["lat"], o["lon"]) <= 3.0
+        ]
+        if _nearby:
+            _odf = pd.DataFrame(_nearby)
+            _gmaps_links = _odf.apply(
+                lambda r: f"https://www.google.com/maps/search/?api=1&query={r['lat']:.6f},{r['lon']:.6f}",
+                axis=1,
+            )
+            fig.add_trace(go.Scattermapbox(
+                lat=_odf["lat"],
+                lon=_odf["lon"],
+                mode="markers",
+                marker=dict(size=11, color=_sp_color, symbol="circle"),
+                customdata=np.stack([
+                    _odf["user"],
+                    _odf.get("observed_on", pd.Series([""] * len(_odf))),
+                    _odf["lat"].map("{:.5f}".format),
+                    _odf["lon"].map("{:.5f}".format),
+                    _gmaps_links,
+                ], axis=-1),
+                hovertemplate=(
+                    f"<b>🌿 {_species}</b><br>"
+                    "Observer: @%{customdata[0]}<br>"
+                    "Date: %{customdata[1]}<br>"
+                    "Location: %{customdata[2]}, %{customdata[3]}<br>"
+                    "<a href='%{customdata[4]}'>🔗 Google Maps</a>"
+                    "<extra></extra>"
+                ),
+                name=f"{_species} (nearby)",
+            ))
+
+# ── Star marker for selected/pinned candidate ──────────────────────────────────
+fig.add_trace(go.Scattermapbox(
+    lat=[_active_lat],
+    lon=[_active_lon],
+    mode="markers",
+    marker=dict(size=18, color="#00e5ff", symbol="star"),
+    hovertext=f"📌 Selected: {_active_lat:.6f}, {_active_lon:.6f}",
+    hoverinfo="text",
+    name="Selected",
+    showlegend=False,
+))
+
+# ── Grid center marker ─────────────────────────────────────────────────────────
+fig.add_trace(go.Scattermapbox(
+    lat=[st.session_state.grid_center_lat],
+    lon=[st.session_state.grid_center_lon],
+    mode="markers+text",
+    marker=dict(size=14, color="white", symbol="star"),
+    text=["Grid Center"],
+    textposition="top right",
+    textfont=dict(color="white", size=11),
+    hoverinfo="text",
+    hovertext=f"Grid Center ({st.session_state.grid_center_lat}, {st.session_state.grid_center_lon})",
+    name="Center",
+    showlegend=False,
+))
+
 # ── Overlays ────────────────────────────────────────────────────────────────────
 mapbox_layers = []
 for ov in st.session_state.map_overlays:
@@ -552,7 +664,7 @@ fig.update_layout(
     ),
 )
 
-# ── Render map with click selection ────────────────────────────────────────────
+# ── Render map ────────────────────────────────────────────────────────────────
 map_event = st.plotly_chart(
     fig,
     use_container_width=True,
@@ -560,18 +672,23 @@ map_event = st.plotly_chart(
     on_select="rerun",
     key="field_map_v2",
 )
-st.caption("💡 Click any point to load its coordinates below.")
+st.caption("💡 Click any grid point to show nearby plant pins and load coordinates. The 🔵 star marks your selected candidate.")
 
-# ── Coordinate copier ──────────────────────────────────────────────────────────
+# ── Extract click from event ────────────────────────────────────────────────────
 clicked_coords = None
+clicked_lat = None
+clicked_lon = None
 if map_event and hasattr(map_event, "selection"):
-    pts = map_event.selection.get("points", []) if isinstance(map_event.selection, dict) else []
-    if pts:
-        pt = pts[0]
-        lat = pt.get("lat") or pt.get("y")
-        lon = pt.get("lon") or pt.get("x")
-        if lat is not None and lon is not None:
-            clicked_coords = f"{float(lat):.6f}, {float(lon):.6f}"
+    _sel = map_event.selection if isinstance(map_event.selection, dict) else {}
+    _pts = _sel.get("points", [])
+    if _pts:
+        _pt = _pts[0]
+        _lat = _pt.get("lat") or _pt.get("y")
+        _lon = _pt.get("lon") or _pt.get("x")
+        if _lat is not None and _lon is not None:
+            clicked_lat = float(_lat)
+            clicked_lon = float(_lon)
+            clicked_coords = f"{clicked_lat:.6f}, {clicked_lon:.6f}"
 
 st.markdown("---")
 col_tbl, col_cpy = st.columns([2.5, 1.5])
@@ -589,35 +706,50 @@ with col_tbl:
 
     top20 = scores.head(20)[show_cols].copy()
     top20.insert(0, "Rank", range(1, len(top20) + 1))
+    # Build full Google Maps URLs so LinkColumn renders them as clickable links
     top20["Google Maps"] = top20.apply(
-        lambda r: f"{float(r['Lat']):.6f}, {float(r['Lon']):.6f}", axis=1
+        lambda r: f"https://www.google.com/maps/search/?api=1&query={float(r['Lat']):.6f},{float(r['Lon']):.6f}",
+        axis=1,
     )
     top20["MatchRate"] = top20["MatchRate"].map("{:.1%}".format)
     if "Elevation_m" in top20.columns:
         top20["Elevation_m"] = top20["Elevation_m"].map("{:.0f} m".format)
     if "CombinedScore" in top20.columns:
         top20["CombinedScore"] = top20["CombinedScore"].map("{:.3f}".format)
-    st.dataframe(top20, use_container_width=True, hide_index=True)
+    st.dataframe(
+        top20,
+        use_container_width=True,
+        hide_index=True,
+        column_config={
+            "Google Maps": st.column_config.LinkColumn(
+                "Google Maps",
+                display_text="🔗 Open",
+            )
+        },
+    )
 
 with col_cpy:
     st.subheader("📍 Coordinate Copier")
-    if clicked_coords:
-        st.success("🎯 Map point selected!")
-        st.code(clicked_coords, language="text")
-        st.caption("Paste the above directly into Google Maps or Sheets.")
-        gmaps = f"https://www.google.com/maps/search/?api=1&query={clicked_coords.replace(' ', '')}"
-        st.markdown(f"[🔗 Open in Google Maps]({gmaps})")
-        if st.button("Clear selection"):
-            st.rerun()
-    else:
-        st.caption("Click a map point above, or pick from the list:")
-        opts = [
-            f"#{i+1}: {row['Lat']:.6f}, {row['Lon']:.6f}"
-            for i, row in scores.head(20).iterrows()
-        ]
-        sel_opt = st.selectbox("Location", opts, label_visibility="collapsed")
-        if sel_opt:
-            coords = sel_opt.split(": ", 1)[1]
-            st.code(coords, language="text")
-            gmaps = f"https://www.google.com/maps/search/?api=1&query={coords.replace(' ', '')}"
-            st.markdown(f"[🔗 Open in Google Maps]({gmaps})")
+    # Show clicked map point if available, otherwise show pinned candidate
+    display_coords = clicked_coords if clicked_coords else _pinned_coords
+    display_label  = "🎯 Map Point Selected!" if clicked_coords else f"📌 Candidate #{st.session_state.fa_pin_idx + 1}"
+
+    st.success(display_label)
+    st.code(display_coords, language="text")
+    st.caption("Paste directly into Google Maps or Sheets.")
+    _gmaps = f"https://www.google.com/maps/search/?api=1&query={display_coords.replace(' ', '')}"
+    st.markdown(f"[🔗 Open in Google Maps]({_gmaps})")
+
+    if clicked_coords and st.button("Clear map selection"):
+        st.rerun()
+
+    if st.session_state.plant_obs_dict:
+        st.markdown("---")
+        st.caption("🌿 **Nearby plants** (within 3 mi of selected point):")
+        for _sp, _obs in st.session_state.plant_obs_dict.items():
+            _nearby_count = sum(
+                1 for o in _obs
+                if haversine_distance(_active_lat, _active_lon, o["lat"], o["lon"]) <= 3.0
+            )
+            if _nearby_count:
+                st.markdown(f"- **{_sp}**: {_nearby_count} observations")

@@ -1286,6 +1286,29 @@ with tab3:
                 st.warning("No points match the current score filter — try widening the range.")
                 st.stop()
 
+            # ── Candidate picker (placed above map so star renders on next rerun) ───
+            if "main_pin_idx" not in st.session_state:
+                st.session_state.main_pin_idx = 0
+
+            _main_pin_opts = [
+                f"#{i+1}  {row['Lat']:.5f}, {row['Lon']:.5f}  (score {row.get('CombinedScore', row.get('MatchRate', 0)):.3f})"
+                for i, row in scores.head(20).iterrows()
+            ]
+            _main_pin_sel = st.selectbox(
+                "📌 Highlight a top candidate on the map",
+                options=_main_pin_opts,
+                index=min(st.session_state.main_pin_idx, len(_main_pin_opts) - 1),
+                key="main_pin_select",
+                help="Places a cyan star on the map at the selected candidate location.",
+            )
+            _main_pin_new_idx = _main_pin_opts.index(_main_pin_sel)
+            if _main_pin_new_idx != st.session_state.main_pin_idx:
+                st.session_state.main_pin_idx = _main_pin_new_idx
+                st.rerun()
+            _main_pinned_row = scores.iloc[st.session_state.main_pin_idx]
+            _main_pin_lat   = float(_main_pinned_row["Lat"])
+            _main_pin_lon   = float(_main_pinned_row["Lon"])
+
             # Dynamic map center and zoom level based on user's active grid settings
             map_center = {
                 "lat": st.session_state.grid_center_lat,
@@ -1459,6 +1482,18 @@ with tab3:
                             name=f"{species_name} (in radius)"
                         ))
 
+            # Candidate star marker from the dropdown above
+            fig.add_trace(go.Scattermapbox(
+                lat=[_main_pin_lat],
+                lon=[_main_pin_lon],
+                mode="markers",
+                marker=dict(size=18, color="#00e5ff", symbol="star"),
+                hovertext=f"📌 Selected: {_main_pin_lat:.6f}, {_main_pin_lon:.6f}",
+                hoverinfo="text",
+                name="Selected",
+                showlegend=False,
+            ))
+
             # Custom center marker
             fig.add_trace(go.Scattermapbox(
                 lat=[st.session_state.grid_center_lat],
@@ -1526,8 +1561,11 @@ with tab3:
                 top10 = scores.head(10)[tbl_cols].copy()
                 top10.insert(0, "Rank", range(1, len(top10) + 1))
 
-                # Add formatted copy-paste coordinates column
-                top10["Google Maps Coordinates"] = top10.apply(lambda r: f"{float(r['Lat']):.6f}, {float(r['Lon']):.6f}", axis=1)
+                # Build full URLs so LinkColumn renders them as clickable
+                top10["Google Maps Coordinates"] = top10.apply(
+                    lambda r: f"https://www.google.com/maps/search/?api=1&query={float(r['Lat']):.6f},{float(r['Lon']):.6f}",
+                    axis=1,
+                )
 
                 top10["MatchRate"]    = top10["MatchRate"].map("{:.1%}".format)
                 top10["Confidence_Z"] = top10["Confidence_Z"].map("{:+.2f}sigma".format)
@@ -1550,7 +1588,17 @@ with tab3:
 
                 col_names += ["Google Maps Coordinates"]
                 top10.columns = col_names
-                st.dataframe(top10, use_container_width=True, hide_index=True)
+                st.dataframe(
+                    top10,
+                    use_container_width=True,
+                    hide_index=True,
+                    column_config={
+                        "Google Maps Coordinates": st.column_config.LinkColumn(
+                            "Google Maps",
+                            display_text="🔗 Open",
+                        )
+                    },
+                )
 
             with col_cpy:
                 st.subheader("📍 Coordinate Copier")
@@ -1580,12 +1628,14 @@ with tab3:
                             f"Rank #{i+1}: {row['Lat']:.6f}, {row['Lon']:.6f} ({row['MatchRate']:.1%} match)"
                             for i, row in scores.head(20).iterrows()
                         ]
-                        
+
                     selected_opt = st.selectbox(
                         "Select location to copy",
                         copy_opts,
+                        index=st.session_state.main_pin_idx,
                         label_visibility="visible",
-                        help="Select a location to easily copy its coordinates for pasting into Google Maps, Google Sheets, etc."
+                        help="Select a location to easily copy its coordinates for pasting into Google Maps, Google Sheets, etc.",
+                        key="main_copy_sel",
                     )
                     if selected_opt:
                         # Extract the lat, lon
