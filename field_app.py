@@ -573,8 +573,8 @@ color_col = "CombinedScore" if "CombinedScore" in map_df.columns else "MatchRate
 _max_score = float(map_df[color_col].max()) if map_df[color_col].notna().any() else 1.0
 
 # ── Apply score filter from session state ─────────────────────────────────────
-_fmin = float(map_df["CombinedScore"].min()) if "CombinedScore" in map_df.columns else 0.0
-_fmax = float(map_df["CombinedScore"].max()) if "CombinedScore" in map_df.columns else 1.0
+_fmin = float(map_df[color_col].min()) if map_df[color_col].notna().any() else 0.0
+_fmax = float(map_df[color_col].max()) if map_df[color_col].notna().any() else 1.0
 _fmax = _fmax if _fmax > _fmin else _fmin + 0.001
 _frange = st.session_state.fa_score_range or (round(_fmin, 3), round(_fmax, 3))
 # Clamp to current data bounds
@@ -594,9 +594,10 @@ st.markdown("""
 """, unsafe_allow_html=True)
 
 map_df = map_df[
-    (map_df["CombinedScore"] >= _frange[0]) &
-    (map_df["CombinedScore"] <= _frange[1])
+    (map_df[color_col].fillna(0.0) >= _frange[0]) &
+    (map_df[color_col].fillna(0.0) <= _frange[1])
 ]
+
 if map_df.empty:
     st.warning("No points match the current score filter — try widening the range below.")
     st.stop()
@@ -880,14 +881,15 @@ with st.expander("🎛️ Score Filter & Candidate Highlight", expanded=False):
     st.caption("These update the map on the next interaction without zooming out.")
 
     # Score range slider
-    _s_fmin = float(scores["CombinedScore"].min()) if "CombinedScore" in scores.columns else 0.0
-    _s_fmax = float(scores["CombinedScore"].max()) if "CombinedScore" in scores.columns else 1.0
+    _scol = "CombinedScore" if "CombinedScore" in scores.columns else "MatchRate"
+    _s_fmin = float(scores[_scol].min()) if scores[_scol].notna().any() else 0.0
+    _s_fmax = float(scores[_scol].max()) if scores[_scol].notna().any() else 1.0
     _s_fmax = _s_fmax if _s_fmax > _s_fmin else _s_fmin + 0.001
     _cur_range = st.session_state.fa_score_range or (round(_s_fmin, 3), round(_s_fmax, 3))
     _cur_range = (max(float(_cur_range[0]), _s_fmin), min(float(_cur_range[1]), _s_fmax))
 
     _new_frange = st.slider(
-        "Filter by Combined Score",
+        f"Filter by {_scol}",
         min_value=round(_s_fmin, 3),
         max_value=round(_s_fmax, 3),
         value=_cur_range,
