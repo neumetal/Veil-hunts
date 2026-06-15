@@ -526,23 +526,16 @@ fig.update_traces(
     marker=dict(size=7),
 )
 
-# ── Extract clicked map point ──────────────────────────────────────────────────
-# (Must be extracted before the map renders so plant pins can be added to fig)
-if "field_map_v2" not in st.session_state:
-    st.session_state.field_map_v2 = None
+# ── Use persisted click state (separate key from the widget) ──────────────────
+# Streamlit forbids writing to st.session_state[widget_key] directly.
+# Instead we store the last clicked point under non-widget keys.
+if "fa_clicked_lat" not in st.session_state:
+    st.session_state.fa_clicked_lat = None
+if "fa_clicked_lon" not in st.session_state:
+    st.session_state.fa_clicked_lon = None
 
-_map_state = st.session_state.get("field_map_v2")
-_clicked_lat = None
-_clicked_lon = None
-if _map_state and isinstance(_map_state, dict):
-    _pts = _map_state.get("selection", {}).get("points", [])
-    if _pts:
-        _pt = _pts[0]
-        _lat = _pt.get("lat") or _pt.get("y")
-        _lon = _pt.get("lon") or _pt.get("x")
-        if _lat is not None and _lon is not None:
-            _clicked_lat = float(_lat)
-            _clicked_lon = float(_lon)
+_clicked_lat = st.session_state.fa_clicked_lat
+_clicked_lon = st.session_state.fa_clicked_lon
 
 # Use whichever is set: map click > pinned candidate
 _active_lat = _clicked_lat if _clicked_lat is not None else _pinned_lat
@@ -674,7 +667,7 @@ map_event = st.plotly_chart(
 )
 st.caption("💡 Click any grid point to show nearby plant pins and load coordinates. The 🔵 star marks your selected candidate.")
 
-# ── Extract click from event ────────────────────────────────────────────────────
+# ── Extract click from event and persist in non-widget state ───────────────────
 clicked_coords = None
 clicked_lat = None
 clicked_lon = None
@@ -689,6 +682,12 @@ if map_event and hasattr(map_event, "selection"):
             clicked_lat = float(_lat)
             clicked_lon = float(_lon)
             clicked_coords = f"{clicked_lat:.6f}, {clicked_lon:.6f}"
+            # Persist so next rerun can draw plant pins before map renders
+            if (clicked_lat != st.session_state.fa_clicked_lat or
+                    clicked_lon != st.session_state.fa_clicked_lon):
+                st.session_state.fa_clicked_lat = clicked_lat
+                st.session_state.fa_clicked_lon = clicked_lon
+                st.rerun()
 
 st.markdown("---")
 col_tbl, col_cpy = st.columns([2.5, 1.5])
@@ -741,6 +740,8 @@ with col_cpy:
     st.markdown(f"[🔗 Open in Google Maps]({_gmaps})")
 
     if clicked_coords and st.button("Clear map selection"):
+        st.session_state.fa_clicked_lat = None
+        st.session_state.fa_clicked_lon = None
         st.rerun()
 
     if st.session_state.plant_obs_dict:
