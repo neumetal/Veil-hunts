@@ -226,9 +226,9 @@ if "weight_cloud" not in st.session_state:
 if "weight_contrast" not in st.session_state:
     st.session_state.weight_contrast = 10
 if "fog_threshold" not in st.session_state:
-    st.session_state.fog_threshold = 5
+    st.session_state.fog_threshold = 10
 if "plant_match_mode" not in st.session_state:
-    st.session_state.plant_match_mode = "Any"
+    st.session_state.plant_match_mode = "All"
 if "scores" not in st.session_state:
     st.session_state.scores = None
 if "map_overlays" not in st.session_state:
@@ -560,7 +560,7 @@ _pinned_lat = float(_pinned_row["Lat"])
 _pinned_lon = float(_pinned_row["Lon"])
 _pinned_coords = f"{_pinned_lat:.6f}, {_pinned_lon:.6f}"
 
-# ── Score filter (read from session state — slider is below the map) ────────────
+# ── Score filter (moved to above the map) ─────────────────────────────────────
 if "fa_score_range" not in st.session_state:
     st.session_state.fa_score_range = None
 
@@ -572,13 +572,35 @@ map_df["MatchRate"] = map_df["MatchRate"].fillna(0.0)
 color_col = "CombinedScore" if "CombinedScore" in map_df.columns else "MatchRate"
 _max_score = float(map_df[color_col].max()) if map_df[color_col].notna().any() else 1.0
 
-# ── Apply score filter from session state ─────────────────────────────────────
+# ── Render score filter slider and reset button above the map ──────────────────
 _fmin = float(map_df[color_col].min()) if map_df[color_col].notna().any() else 0.0
 _fmax = float(map_df[color_col].max()) if map_df[color_col].notna().any() else 1.0
 _fmax = _fmax if _fmax > _fmin else _fmin + 0.001
-_frange = st.session_state.fa_score_range or (round(_fmin, 3), round(_fmax, 3))
-# Clamp to current data bounds
-_frange = (max(float(_frange[0]), _fmin), min(float(_frange[1]), _fmax))
+_cur_range = st.session_state.fa_score_range or (round(_fmin, 3), round(_fmax, 3))
+_cur_range = (max(float(_cur_range[0]), _fmin), min(float(_cur_range[1]), _fmax))
+
+col_slider, col_btn = st.columns([5, 1])
+with col_slider:
+    _new_frange = st.slider(
+        f"Filter by {color_col}",
+        min_value=round(_fmin, 3),
+        max_value=round(_fmax, 3),
+        value=_cur_range,
+        step=round((_fmax - _fmin) / 200, 4) or 0.001,
+        help="Drag to hide low or high scoring points on the map.",
+        key="fa_score_filter_above",
+    )
+with col_btn:
+    st.markdown("<div style='height: 28px;'></div>", unsafe_allow_html=True)  # Visual alignment
+    if st.button("Reset filter", use_container_width=True, key="fa_reset_filter_above"):
+        st.session_state.fa_score_range = None
+        st.rerun()
+
+if _new_frange != tuple(st.session_state.fa_score_range or ()):
+    st.session_state.fa_score_range = _new_frange
+    st.rerun()
+
+_frange = _new_frange
 
 # Slim gradient bar — doubles as the legend for map colours
 st.markdown("""
@@ -880,36 +902,9 @@ st.dataframe(
 
 st.markdown("---")
 
-# ══ SCORE FILTER & CANDIDATE PICKER (below map so they don't push map down) ══
-with st.expander("🎛️ Score Filter & Candidate Highlight", expanded=False):
-    st.caption("These update the map on the next interaction without zooming out.")
-
-    # Score range slider
-    _scol = "CombinedScore" if "CombinedScore" in scores.columns else "MatchRate"
-    _s_fmin = float(scores[_scol].min()) if scores[_scol].notna().any() else 0.0
-    _s_fmax = float(scores[_scol].max()) if scores[_scol].notna().any() else 1.0
-    _s_fmax = _s_fmax if _s_fmax > _s_fmin else _s_fmin + 0.001
-    _cur_range = st.session_state.fa_score_range or (round(_s_fmin, 3), round(_s_fmax, 3))
-    _cur_range = (max(float(_cur_range[0]), _s_fmin), min(float(_cur_range[1]), _s_fmax))
-
-    _new_frange = st.slider(
-        f"Filter by {_scol}",
-        min_value=round(_s_fmin, 3),
-        max_value=round(_s_fmax, 3),
-        value=_cur_range,
-        step=round((_s_fmax - _s_fmin) / 200, 4) or 0.001,
-        help="Drag to hide low or high scoring points on the map.",
-        key="fa_score_filter_below",
-    )
-    if _new_frange != tuple(st.session_state.fa_score_range or ()):
-        st.session_state.fa_score_range = _new_frange
-        st.rerun()
-
-    if st.button("Reset score filter", use_container_width=True, key="fa_reset_filter"):
-        st.session_state.fa_score_range = None
-        st.rerun()
-
-    st.markdown("---")
+# ══ CANDIDATE HIGHLIGHT (below map so they don't push map down) ═══════════════
+with st.expander("📌 Highlight Candidate", expanded=False):
+    st.caption("This updates the map highlight on the next interaction without zooming out.")
 
     # Candidate picker
     _pin_opts = [
