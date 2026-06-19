@@ -53,5 +53,16 @@
     "pct_clear": 42.5,
     "pct_cloudy": 11.4,
     "created_at": "2026-06-15T11:02:06.956210"
+  },
+  {
+    "id": "dde6326c-2971-44ad-aecb-1cb79f8b11a5",
+    "date": "2026-06-19",
+    "window": "3PM-6PM",
+    "trailcam_condition": "Cloudy",
+    "notes": "",
+    "spread": 89.0,
+    "pct_clear": 28.1,
+    "pct_cloudy": 17.3,
+    "created_at": "2026-06-19T19:23:45.243006"
   }
 ]

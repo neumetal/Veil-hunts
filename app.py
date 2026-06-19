@@ -1965,7 +1965,7 @@ with tab5:
                         _prog_bar.progress(1.0, text="Done!")
                         st.success(_result_msg)
                         st.cache_data.clear()
-                        st.session_state.selected_csv = _MASTER_CSV
+                        st.session_state.selected_csv = _MASTER_PARQUET
                         invalidate_scores()
                         st.rerun()
                     else:
@@ -2036,7 +2036,7 @@ with tab5:
                     st.success(result_msg)
                     # Reload the master CSV and reset everything
                     st.cache_data.clear()
-                    st.session_state.selected_csv = _MASTER_CSV
+                    st.session_state.selected_csv = _MASTER_PARQUET
                     invalidate_scores()
                     st.rerun()
                 else:
