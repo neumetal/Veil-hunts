@@ -8,12 +8,25 @@
       "path": "C:\\veil_finder_project\\hunts\\veil_eight\\overlays\\signal-2026-06-14-121551_002.png",
       "lat": 40.37958,
       "lon": -77.031272,
-      "width": 322.1,
-      "height": 607.422467771639,
+      "width": 312.1,
+      "height": 588.5642725598527,
       "rotation": 0.0,
-      "opacity": 0.2,
+      "opacity": 0.35,
       "anchor_x": 0.016129032258064516,
       "anchor_y": 0.5571428571428572,
+      "visible": true
+    },
+    {
+      "name": "95c168f5-2_-_Northeast.png",
+      "path": "C:\\veil_finder_project\\hunts\\veil_eight\\overlays\\95c168f5-2_-_Northeast.png",
+      "lat": 40.6982,
+      "lon": -74.041503,
+      "width": 500.0,
+      "height": 500.0,
+      "rotation": 0.0,
+      "opacity": 0.9,
+      "anchor_x": 0.5,
+      "anchor_y": 0.5,
       "visible": true
     }
   ]

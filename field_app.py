@@ -19,6 +19,7 @@ import plotly.express as px
 import plotly.graph_objects as go
 import streamlit as st
 
+
 # ── Backend imports (no importlib.reload – breaks Streamlit Cloud cold starts) ─
 _HERE = os.path.dirname(os.path.abspath(__file__))
 sys.path.insert(0, os.path.join(_HERE, "backend"))
@@ -30,6 +31,10 @@ from scorer import (
     score_contrast_observations,
     haversine_distance,
 )
+import importlib
+import osm_client
+importlib.reload(osm_client)
+from osm_client import fetch_parks_osm
 from fetcher import load_master_csv
 from grid_utils import generate_grid
 from geometry_utils import get_rotated_corners
@@ -677,41 +682,44 @@ _clicked_lon = st.session_state.fa_clicked_lon
 _active_lat = _clicked_lat if _clicked_lat is not None else _pinned_lat
 _active_lon = _clicked_lon if _clicked_lon is not None else _pinned_lon
 
-# ── Plant observation pins ─────────────────────────────────────────────────────
-if st.session_state.plant_obs_dict:
-    _plant_colors = px.colors.qualitative.Plotly
-    for _pidx, (_species, _obs_list) in enumerate(st.session_state.plant_obs_dict.items()):
-        _sp_color = _plant_colors[_pidx % len(_plant_colors)]
-        # Hold lat/lon arrays completely constant across reruns to prevent Plotly from resetting zoom
-        _odf = pd.DataFrame(_obs_list)
-        if "observed_on" not in _odf.columns:
-            _odf["observed_on"] = ""
-            
-        _dists = _odf.apply(lambda r: haversine_distance(_active_lat, _active_lon, r["lat"], r["lon"]), axis=1)
-        _sizes = np.where(_dists <= 3.0, 11, 0)
-        
-        _cdata = np.column_stack([
-            _odf["user"].astype(str).values,
-            _odf["observed_on"].astype(str).values,
-            _odf["lat"].map("{:.5f}".format).values,
-            _odf["lon"].map("{:.5f}".format).values,
-        ])
-            
-        fig.add_trace(go.Scattermapbox(
-            lat=_odf["lat"],
-            lon=_odf["lon"],
-            mode="markers",
-            marker=dict(size=_sizes, color=_sp_color, symbol="circle"),
-            customdata=_cdata,
-            hovertemplate=(
-                f"<b>🌿 {_species}</b><br>"
-                "Observer: @%{customdata[0]}<br>"
-                "Date: %{customdata[1]}<br>"
-                "Location: %{customdata[2]}, %{customdata[3]}"
-                "<extra></extra>"
-            ),
-            name=f"{_species} (nearby)",
-        ))
+# ── OSM Parks trace ────────────────────────────────────────────────────────────
+_parks = fetch_parks_osm(_active_lat, _active_lon)
+if _parks:
+    _park_df = pd.DataFrame(_parks)
+    
+    # Calculate observations within 0.2 miles of each park
+    _park_counts = []
+    for _p in _parks:
+        _count = 0
+        if st.session_state.plant_obs_dict:
+            for _species, _obs_list in st.session_state.plant_obs_dict.items():
+                for _o in _obs_list:
+                    if haversine_distance(_p["lat"], _p["lon"], _o["lat"], _o["lon"]) <= 0.2:
+                        _count += 1
+        _park_counts.append(_count)
+    _park_df["plants_count"] = _park_counts
+    
+    _park_cdata = np.column_stack([
+        _park_df["name"].astype(str).values,
+        _park_df["plants_count"].astype(str).values,
+        _park_df["lat"].map("{:.5f}".format).values,
+        _park_df["lon"].map("{:.5f}".format).values,
+    ])
+    
+    fig.add_trace(go.Scattermapbox(
+        lat=_park_df["lat"],
+        lon=_park_df["lon"],
+        mode="markers",
+        marker=dict(size=12, color="#1a7f37", symbol="circle"),
+        customdata=_park_cdata,
+        hovertemplate=(
+            "<b>🌳 %{customdata[0]}</b><br>"
+            "Plant Observations: %{customdata[1]}<br>"
+            "Location: %{customdata[2]}, %{customdata[3]}"
+            "<extra></extra>"
+        ),
+        name="Parks",
+    ))
 
 # ── Star marker for selected/pinned candidate ──────────────────────────────────
 fig.add_trace(go.Scattermapbox(
@@ -842,29 +850,89 @@ if _has_stored and st.button("✖ Clear tap selection", use_container_width=True
     st.session_state.fa_clicked_lon = None
     st.rerun()
 
-# ── Nearby plant summary ────────────────────────────────────────────────────────
+# ── Nearby plant summary (Park-Centric) ─────────────────────────────────────────
 if st.session_state.plant_obs_dict:
-    _any_nearby = any(
-        any(haversine_distance(_active_lat, _active_lon, o["lat"], o["lon"]) <= 3.0
-            for o in _obs)
-        for _obs in st.session_state.plant_obs_dict.values()
-    )
-    if _any_nearby:
-        st.markdown("**🌿 Nearby species (within 3 mi):**")
-        for _sp, _obs in st.session_state.plant_obs_dict.items():
-            _nearby_obs = [
-                o for o in _obs
-                if haversine_distance(_active_lat, _active_lon, o["lat"], o["lon"]) <= 3.0
-            ]
-            if _nearby_obs:
-                st.markdown(f"- **{_sp}**: {len(_nearby_obs)} observations")
-                with st.expander(f"📍 View Google Maps links for {_sp}"):
-                    # Sort by distance to active point
-                    _nearby_obs.sort(key=lambda o: haversine_distance(_active_lat, _active_lon, o["lat"], o["lon"]))
-                    for o in _nearby_obs:
-                        _gmap = f"https://www.google.com/maps/search/?api=1&query={o['lat']:.6f},{o['lon']:.6f}"
-                        _dist = haversine_distance(_active_lat, _active_lon, o["lat"], o["lon"])
-                        st.markdown(f"[{o['lat']:.5f}, {o['lon']:.5f} ({_dist:.1f}mi away)]({_gmap})  — Observer: @{o.get('user', 'unknown')}")
+    # 1. Collect all nearby plant observations within 3.0 miles of selected coordinate
+    _nearby_plants = []
+    for _sp, _obs_list in st.session_state.plant_obs_dict.items():
+        for _o in _obs_list:
+            _dist = haversine_distance(_active_lat, _active_lon, _o["lat"], _o["lon"])
+            if _dist <= 3.0:
+                _o_copy = _o.copy()
+                _o_copy["species"] = _sp
+                _o_copy["dist_to_center"] = _dist
+                _nearby_plants.append(_o_copy)
+                
+    _parks = fetch_parks_osm(_active_lat, _active_lon)
+    if _nearby_plants or _parks:
+        st.markdown("**🌳 Nearby Parks & Plant Observations:**")
+        
+        # Group plants by closest park if within 0.2 miles
+        _park_plants = {p["osm_id"]: [] for p in _parks}
+        _other_plants = []
+        
+        for _plant in _nearby_plants:
+            _closest_park = None
+            _min_dist = float("inf")
+            for _p in _parks:
+                _p_dist = haversine_distance(_plant["lat"], _plant["lon"], _p["lat"], _p["lon"])
+                if _p_dist < _min_dist:
+                    _min_dist = _p_dist
+                    _closest_park = _p
+                    
+            if _closest_park is not None and _min_dist <= 0.2:
+                _park_plants[_closest_park["osm_id"]].append(_plant)
+            else:
+                _other_plants.append(_plant)
+                
+        # Sort parks: count of plants descending, then distance ascending
+        _parks_sorted = []
+        for _p in _parks:
+            _p_plants = _park_plants[_p["osm_id"]]
+            _dist_to_center = haversine_distance(_active_lat, _active_lon, _p["lat"], _p["lon"])
+            _parks_sorted.append({
+                **_p,
+                "dist_to_center": _dist_to_center,
+                "plants_count": len(_p_plants),
+                "plants": _p_plants
+            })
+        _parks_sorted.sort(key=lambda x: (-x["plants_count"], x["dist_to_center"]))
+        
+        # Render park expanders
+        for _p in _parks_sorted:
+            _label = f"🌳 {_p['name']} ({_p['plants_count']})"
+            with st.expander(_label):
+                st.markdown(f"**Distance from selected center:** {_p['dist_to_center']:.2f} miles")
+                st.markdown(f"**OSM Type/ID:** `{_p['type']}/{_p['osm_id']}`")
+                _gmap_park = f"https://www.google.com/maps/search/?api=1&query={_p['lat']:.6f},{_p['lon']:.6f}"
+                st.markdown(f"[🔗 Open Park in Google Maps]({_gmap_park})")
+                st.markdown("---")
+                
+                if _p["plants"]:
+                    # Sort plants inside park by distance to park center
+                    _p["plants"].sort(key=lambda x: haversine_distance(_p["lat"], _p["lon"], x["lat"], x["lon"]))
+                    for _plant in _p["plants"]:
+                        _gmap_plant = f"https://www.google.com/maps/search/?api=1&query={_plant['lat']:.6f},{_plant['lon']:.6f}"
+                        _dist_to_park = haversine_distance(_p["lat"], _p["lon"], _plant["lat"], _plant["lon"])
+                        st.markdown(
+                            f"- **{_plant['species']}**: [{_plant['lat']:.5f}, {_plant['lon']:.5f}]({_gmap_plant}) "
+                            f"({_dist_to_park:.2f} mi from park center) — Observer: @{_plant.get('user', 'unknown')}, Date: {_plant.get('observed_on', 'unknown')}"
+                        )
+                else:
+                    st.write("No nearby plant observations recorded in this park.")
+                    
+        # Render fallback expander for plants not inside any park
+        if _other_plants:
+            _other_plants.sort(key=lambda x: x["dist_to_center"])
+            with st.expander(f"🌿 Other ({len(_other_plants)})"):
+                st.markdown("*Not within 0.2 mi of a mapped park.*")
+                st.markdown("---")
+                for _plant in _other_plants:
+                    _gmap_plant = f"https://www.google.com/maps/search/?api=1&query={_plant['lat']:.6f},{_plant['lon']:.6f}"
+                    st.markdown(
+                        f"- **{_plant['species']}**: [{_plant['lat']:.5f}, {_plant['lon']:.5f}]({_gmap_plant}) "
+                        f"({_plant['dist_to_center']:.2f} mi away) — Observer: @{_plant.get('user', 'unknown')}, Date: {_plant.get('observed_on', 'unknown')}"
+                    )
 
 st.markdown("---")
 

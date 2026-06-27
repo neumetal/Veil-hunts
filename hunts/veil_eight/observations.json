@@ -40,14 +40,14 @@
     "created_at": "2026-06-01T14:10:59.773818"
   },
   {
-    "id": "d7f8de9a-1b22-48de-95cd-e2aede8a5bcb",
+    "id": "1aad9ae4-8692-437c-bb8d-1531f249afdd",
     "date": "2026-06-02",
-    "time_start": "00:00",
-    "time_end": "06:00",
-    "fog_observed": false,
+    "time_start": "06:00",
+    "time_end": "09:00",
+    "fog_observed": true,
     "notes": "",
     "photo_filename": "",
-    "created_at": "2026-06-03T20:44:15.615057"
+    "created_at": "2026-06-19T22:58:10.559582"
   },
   {
     "id": "d2dc4f35-2981-4ded-9d29-82a06d391366",
@@ -58,5 +58,15 @@
     "notes": "",
     "photo_filename": "",
     "created_at": "2026-06-11T09:53:53.746538"
+  },
+  {
+    "id": "7afd997c-a827-482d-bf2e-6abb1a46856e",
+    "date": "2026-06-23",
+    "time_start": "06:00",
+    "time_end": "09:00",
+    "fog_observed": true,
+    "notes": "",
+    "photo_filename": "",
+    "created_at": "2026-06-27T17:28:12.551873"
   }
 ]
