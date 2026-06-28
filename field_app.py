@@ -223,7 +223,8 @@ if "scores" not in st.session_state:
 if "fog_threshold" not in st.session_state:
     st.session_state.fog_threshold = 5
 if "selected_csv" not in st.session_state:
-    st.session_state.selected_csv = None
+    _mp = get_master_parquet()
+    st.session_state.selected_csv = _mp if os.path.exists(_mp) else None
 _saved_settings = load_settings()
 
 if "grid_center_lat" not in st.session_state:
