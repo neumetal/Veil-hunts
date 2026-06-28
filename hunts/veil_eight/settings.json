@@ -11,7 +11,7 @@
       "width": 312.1,
       "height": 588.5642725598527,
       "rotation": 0.0,
-      "opacity": 0.35,
+      "opacity": 0.05,
       "anchor_x": 0.016129032258064516,
       "anchor_y": 0.5571428571428572,
       "visible": true
@@ -24,7 +24,7 @@
       "width": 500.0,
       "height": 500.0,
       "rotation": 0.0,
-      "opacity": 0.9,
+      "opacity": 0.45,
       "anchor_x": 0.5,
       "anchor_y": 0.5,
       "visible": true
