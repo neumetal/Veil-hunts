@@ -12,6 +12,8 @@ import sys
 import json
 import uuid
 import glob
+import base64
+import subprocess
 import numpy as np
 import pandas as pd
 import plotly.express as px
@@ -22,25 +24,18 @@ from datetime import date, time, datetime
 # ── Backend path ─────────────────────────────────────────────────────────────
 _HERE = os.path.dirname(os.path.abspath(__file__))
 sys.path.insert(0, os.path.join(_HERE, "backend"))
-import importlib
 import scorer
-importlib.reload(scorer)
 from scorer  import (
     score_all_observations, get_point_diagnostics, scores_to_geojson,
     compute_plant_scores, detect_high_contrast_days, score_contrast_observations,
 )
 import osm_client
-importlib.reload(osm_client)
 from osm_client import fetch_parks_osm
 import inaturalist_client
-importlib.reload(inaturalist_client)
 import fetcher
-importlib.reload(fetcher)
-import base64
 from fetcher import smart_fetch, get_missing_data_points, load_master_csv
 from grid_utils import generate_grid
 import geometry_utils
-importlib.reload(geometry_utils)
 from geometry_utils import get_rotated_corners
 from PIL import Image, ImageDraw
 from streamlit_image_coordinates import streamlit_image_coordinates
@@ -204,7 +199,7 @@ def load_settings() -> dict:
             with open(fpath, "r", encoding="utf-8") as f:
                 return json.load(f)
         except Exception:
-            pass
+            st.warning("settings.json could not be parsed — using defaults.")
     return {}
 
 def save_settings(settings: dict) -> None:
@@ -237,8 +232,8 @@ if "grid_center_lon" not in st.session_state:
     st.session_state.grid_center_lon = _saved_settings.get("grid_center_lon", -75.13)
 if "grid_radius_mi" not in st.session_state:
     st.session_state.grid_radius_mi = _saved_settings.get("grid_radius_mi", 40.0)
-if "map_transparency" not in st.session_state:
-    st.session_state.map_transparency = 20
+if "map_opacity" not in st.session_state:
+    st.session_state.map_opacity = 80
 _plants_data = load_plants()
 if "selected_plants" not in st.session_state:
     st.session_state.selected_plants = _plants_data.get("selected_plants", [])
@@ -519,22 +514,22 @@ with st.sidebar:
     c2.metric("Fog",   n_fog)
     c3.metric("Clear", n_clear)
 
-    # Quick rescore button
-    if st.button("Re-score Now", use_container_width=True, type="secondary"):
-        invalidate_scores()
-        st.rerun()
-
     st.markdown("---")
-    with st.expander("Grid Settings", expanded=False):
+    st.markdown('<p class="section-header">Analysis Settings</p>', unsafe_allow_html=True)
+    with st.expander("🗺️ Grid Settings", expanded=False):
         new_lat = st.number_input("Center Latitude", value=st.session_state.grid_center_lat, format="%.6f", step=0.1)
         new_lon = st.number_input("Center Longitude", value=st.session_state.grid_center_lon, format="%.6f", step=0.1)
         new_rad = st.number_input("Radius (miles)", value=float(st.session_state.grid_radius_mi), min_value=1.0, max_value=250.0, step=5.0)
         
         st.markdown("---")
-        new_trans = st.slider("Point Transparency (%)", min_value=0, max_value=95, value=st.session_state.map_transparency, step=5, help="Make grid points semi-transparent to view roads and landmarks under them.")
+        new_opacity = st.slider(
+            "Point Opacity (%)", min_value=5, max_value=100,
+            value=st.session_state.map_opacity, step=5,
+            help="Higher = solid grid points. Lower = more see-through. Image overlay opacity is controlled separately per image."
+        )
         
-        if new_trans != st.session_state.map_transparency:
-            st.session_state.map_transparency = new_trans
+        if new_opacity != st.session_state.map_opacity:
+            st.session_state.map_opacity = new_opacity
             st.rerun()
             
         if (new_lat != st.session_state.grid_center_lat or
@@ -550,6 +545,12 @@ with st.sidebar:
             })
             invalidate_scores()
             st.rerun()
+
+    # Re-score button — placed after Grid Settings so it reads as the "apply" action
+    if st.button("🔄 Re-score Now", use_container_width=True, type="secondary"):
+        invalidate_scores()
+        st.rerun()
+
 
     with st.expander("🌿 iNaturalist Plant Settings", expanded=False):
         # 1. Search and Add Plant
@@ -803,7 +804,8 @@ with st.sidebar:
                 n_h = n_w / aspect_ratio
                     
                 n_rot = st.slider("Rotation (°)", 0.0, 360.0, value=float(overlay["rotation"]), step=1.0, key=f"ov_rot_{idx}")
-                n_op = st.slider("Opacity", 0.0, 1.0, value=float(overlay["opacity"]), step=0.05, key=f"ov_op_{idx}")
+                n_op_pct = st.slider("Overlay Opacity (%)", 0, 100, int(round(float(overlay["opacity"]) * 100)), step=5, key=f"ov_op_{idx}")
+                n_op = n_op_pct / 100.0  # convert back to 0.0-1.0 for storage
                 
                 if (n_lat != overlay["lat"] or n_lon != overlay["lon"] or n_w != overlay["width"] or 
                     n_rot != overlay["rotation"] or n_op != overlay["opacity"] or
@@ -1125,7 +1127,6 @@ with tab2:
 
         # Delete section
         st.markdown("---")
-        st.subheader("Delete Fog Observations")
         all_dates = [o["date"] for o in st.session_state.observations]
         to_delete = st.multiselect(
             "Select dates to remove",
@@ -1147,7 +1148,7 @@ with tab2:
                 st.rerun()
 
     st.markdown("---")
-    st.subheader("Cloud Observations")
+    st.subheader("⛅ Cloud Differential Observations")
     if not st.session_state.cloud_obs_list:
         st.info("No cloud observations yet. Add them in the **Log Observation** tab.")
     else:
@@ -1355,7 +1356,7 @@ with tab3:
                 size_max=18,
                 color_continuous_scale=color_scale,
                 range_color=range_color,
-                opacity=(100.0 - st.session_state.map_transparency) / 100.0,
+                opacity=st.session_state.map_opacity / 100.0,
                 custom_data=custom_data_cols,
                 mapbox_style="carto-darkmatter",
                 zoom=auto_zoom,
@@ -1506,6 +1507,8 @@ with tab3:
             # Preserve manual zoom/pan state unless grid parameters change
             grid_rev_key = f"{st.session_state.grid_center_lat}_{st.session_state.grid_center_lon}_{st.session_state.grid_radius_mi}"
 
+            _cbar_title = color_title   # "Combined Suitability" or "Match Rate"
+            _cbar_fmt   = ".0%" if color_col == "MatchRate" else ".2f"
             fig.update_layout(
                 uirevision=grid_rev_key,
                 paper_bgcolor="#0d1117",
@@ -1513,11 +1516,10 @@ with tab3:
                 margin=dict(l=0, r=0, t=0, b=0),
                 coloraxis_colorbar=dict(
                     title=dict(
-                        text="Match Rate",
+                        text=_cbar_title,
                         font=dict(color="#e6edf3"),
                     ),
-                    tickformat=".0%",
-                    tickvals=[0, 0.25, 0.5, 0.75, 1.0],
+                    tickformat=_cbar_fmt,
                     len=0.55,
                     bgcolor="#161b22",
                     bordercolor="#30363d",
@@ -1525,6 +1527,8 @@ with tab3:
                     tickfont=dict(color="#e6edf3"),
                 ),
             )
+
+            st.caption("💡 **Tip**: Click any point on the map below to instantly load its coordinates into the **Coordinate Copier**!")
 
             # Enable interactive click and selection directly on the map
             st.plotly_chart(
@@ -1534,7 +1538,6 @@ with tab3:
                 on_select="rerun",
                 key="scoring_map"
             )
-            st.caption("💡 **Tip**: Click any point on the map above to load its coordinates instantly into the **Coordinate Copier** below!")
 
             col_tbl, col_cpy = st.columns([2.7, 1.3])
 
@@ -1561,27 +1564,32 @@ with tab3:
                     axis=1,
                 )
 
+                # Format numeric columns before renaming
                 top10["MatchRate"]    = top10["MatchRate"].map("{:.1%}".format)
                 top10["Confidence_Z"] = top10["Confidence_Z"].map("{:+.2f}sigma".format)
                 top10["Elevation_m"]  = top10["Elevation_m"].map("{:.0f} m".format)
-
-                col_names = ["Rank", "Lat", "Lon", "Elevation", "Valley?",
-                             "Match Rate", "Confidence", "Matches", "Obs Used"]
-                if "PlantScore" in scores.columns:
+                if "PlantScore" in top10.columns:
                     top10["PlantScore"] = top10["PlantScore"].map("{:.2f}".format)
-                    col_names += ["Plant Score"]
-                if "CloudScore" in scores.columns:
+                if "CloudScore" in top10.columns:
                     top10["CloudScore"] = top10["CloudScore"].map("{:.2f}".format)
-                    col_names += ["Cloud Diff"]
-                if "ContrastScore" in scores.columns:
+                if "ContrastScore" in top10.columns:
                     top10["ContrastScore"] = top10["ContrastScore"].map("{:.2f}".format)
-                    col_names += ["Contrast"]
-                if "CombinedScore" in scores.columns:
+                if "CombinedScore" in top10.columns:
                     top10["CombinedScore"] = top10["CombinedScore"].map("{:.2f}".format)
-                    col_names += ["Combined Score"]
 
-                col_names += ["Google Maps Coordinates"]
-                top10.columns = col_names
+                # Rename using a dict — safe against column count mismatches
+                top10 = top10.rename(columns={
+                    "Elevation_m":   "Elevation",
+                    "IsValley":      "Valley?",
+                    "MatchRate":     "Match Rate",
+                    "Confidence_Z":  "Confidence",
+                    "Matches":       "Matches",
+                    "ObsCount":      "Obs Used",
+                    "PlantScore":    "Plant Score",
+                    "CloudScore":    "Cloud Diff",
+                    "ContrastScore": "Contrast",
+                    "CombinedScore": "Combined Score",
+                })
                 st.dataframe(
                     top10,
                     use_container_width=True,
@@ -1955,6 +1963,77 @@ with tab5:
                 "Switch to **Log Observation > High-Contrast Cloud** to record your trailcam findings for any of these."
             )
 
+    # ── Fetch Missing Data (observation-driven) ────────────────────────────────
+    st.markdown("---")
+    st.subheader("Fetch Missing Data")
+
+    if not st.session_state.observations and not st.session_state.cloud_obs_list:
+        st.info("Log some observations first, then fetch their satellite data here.")
+    else:
+        current_grid_for_fetch = generate_grid(
+            center_lat=st.session_state.grid_center_lat,
+            center_lon=st.session_state.grid_center_lon,
+            radius_km=st.session_state.grid_radius_mi * 1.60934
+        )
+        existing_df_for_fetch = get_fog_df()
+        all_dates, missing_points = get_missing_data_points(
+            st.session_state.observations + st.session_state.cloud_obs_list,
+            existing_df_for_fetch,
+            current_grid_for_fetch
+        )
+
+        if not missing_points:
+            st.success("Nothing to fetch — all observation dates already have satellite data for the current grid.")
+        else:
+            n_pts = len(missing_points)
+            est_min = max(1, round(n_pts * 0.13 / 60))
+            st.caption(
+                f"Your grid requires **{len(current_grid_for_fetch)} total points**.\n\n"
+                f"We found **{n_pts} point(s)** missing data for your observation dates.\n\n"
+                f"Estimated time to fetch: **~{est_min} min**."
+            )
+
+            if st.button("Fetch Missing Data for Current Grid", type="primary",
+                         use_container_width=False):
+
+                progress_bar   = st.progress(0, text="Starting...")
+                log_placeholder = st.empty()
+                _log_lines: list[str] = []
+
+                def _log(msg: str) -> None:
+                    _log_lines.append(msg)
+                    # Show last 6 messages
+                    log_placeholder.markdown(
+                        "\n".join(f"- {m}" for m in _log_lines[-6:])
+                    )
+
+                def _on_point(done: int, total: int) -> None:
+                    progress_bar.progress(
+                        done / total,
+                        text=f"Fetching grid points: {done} / {total}",
+                    )
+
+                new_fog_df, n_fetched, result_msg = smart_fetch(
+                    st.session_state.observations + st.session_state.cloud_obs_list,
+                    center_lat=st.session_state.grid_center_lat,
+                    center_lon=st.session_state.grid_center_lon,
+                    radius_km=st.session_state.grid_radius_mi * 1.60934,
+                    export_dir=get_export_dir(),
+                    on_point_progress=_on_point,
+                    log_fn=_log,
+                )
+
+                if n_fetched > 0:
+                    progress_bar.progress(1.0, text="Fetch complete!")
+                    st.success(result_msg)
+                    # Reload the master CSV and reset everything
+                    st.cache_data.clear()
+                    st.session_state.selected_csv = _MASTER_PARQUET
+                    invalidate_scores()
+                    st.rerun()
+                else:
+                    st.info(result_msg)
+
     # ── Fetch Date Range for High-Contrast Scanning ───────────────────────────
     st.markdown("---")
     st.subheader("📅 Fetch Date Range (High-Contrast Scan)")
@@ -2049,76 +2128,6 @@ with tab5:
                     else:
                         st.info(_result_msg)
 
-    # ── Fetch Missing Data (observation-driven) ────────────────────────────────
-    st.markdown("---")
-    st.subheader("Fetch Missing Data")
-
-    if not st.session_state.observations and not st.session_state.cloud_obs_list:
-        st.info("Log some observations first, then fetch their satellite data here.")
-    else:
-        current_grid_for_fetch = generate_grid(
-            center_lat=st.session_state.grid_center_lat,
-            center_lon=st.session_state.grid_center_lon,
-            radius_km=st.session_state.grid_radius_mi * 1.60934
-        )
-        existing_df_for_fetch = get_fog_df()
-        all_dates, missing_points = get_missing_data_points(
-            st.session_state.observations + st.session_state.cloud_obs_list,
-            existing_df_for_fetch,
-            current_grid_for_fetch
-        )
-
-        if not missing_points:
-            st.success("Nothing to fetch — all observation dates already have satellite data for the current grid.")
-        else:
-            n_pts = len(missing_points)
-            est_min = max(1, round(n_pts * 0.13 / 60))
-            st.caption(
-                f"Your grid requires **{len(current_grid_for_fetch)} total points**.\n\n"
-                f"We found **{n_pts} point(s)** missing data for your observation dates.\n\n"
-                f"Estimated time to fetch: **~{est_min} min**."
-            )
-
-            if st.button("Fetch Missing Data for Current Grid", type="primary",
-                         use_container_width=False):
-
-                progress_bar   = st.progress(0, text="Starting...")
-                log_placeholder = st.empty()
-                _log_lines: list[str] = []
-
-                def _log(msg: str) -> None:
-                    _log_lines.append(msg)
-                    # Show last 6 messages
-                    log_placeholder.markdown(
-                        "\n".join(f"- {m}" for m in _log_lines[-6:])
-                    )
-
-                def _on_point(done: int, total: int) -> None:
-                    progress_bar.progress(
-                        done / total,
-                        text=f"Fetching grid points: {done} / {total}",
-                    )
-
-                new_fog_df, n_fetched, result_msg = smart_fetch(
-                    st.session_state.observations + st.session_state.cloud_obs_list,
-                    center_lat=st.session_state.grid_center_lat,
-                    center_lon=st.session_state.grid_center_lon,
-                    radius_km=st.session_state.grid_radius_mi * 1.60934,
-                    export_dir=get_export_dir(),
-                    on_point_progress=_on_point,
-                    log_fn=_log,
-                )
-
-                if n_fetched > 0:
-                    progress_bar.progress(1.0, text="Fetch complete!")
-                    st.success(result_msg)
-                    # Reload the master CSV and reset everything
-                    st.cache_data.clear()
-                    st.session_state.selected_csv = _MASTER_PARQUET
-                    invalidate_scores()
-                    st.rerun()
-                else:
-                    st.info(result_msg)
 
 
 # ─── TAB 6: Export ────────────────────────────────────────────────────────────
@@ -2201,12 +2210,11 @@ with tab6:
     st.markdown("---")
     st.subheader("Cloud Sync & Backups")
     st.caption("Backup all your hunts to your remote GitHub repository.")
-    
-    import subprocess
-    
+
+    _saved_remote = load_settings().get("git_remote_url", "https://github.com/neumetal/Veil-hunts.git")
     col_g1, col_g2 = st.columns([3, 1])
     with col_g1:
-        remote_url = st.text_input("GitHub Remote URL", value="https://github.com/neumetal/Veil-hunts.git", key="git_remote")
+        remote_url = st.text_input("GitHub Remote URL", value=_saved_remote, key="git_remote")
     with col_g2:
         st.write("")
         st.write("")
@@ -2217,6 +2225,9 @@ with tab6:
                     subprocess.run(["git", "remote", "set-url", "origin", remote_url], cwd=_HERE)
                 else:
                     subprocess.run(["git", "remote", "add", "origin", remote_url], cwd=_HERE)
+                _remote_settings = load_settings()
+                _remote_settings["git_remote_url"] = remote_url
+                save_settings(_remote_settings)
                 st.toast("Remote updated!")
             except Exception as e:
                 st.error(f"Failed to set remote: {e}")

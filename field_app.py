@@ -1,173 +1,52 @@
 """
-field_app.py  –  Veil Finder Field Viewer (read-only, cloud-safe)
-
-Streamlit app for use in the field. Shows the scoring map, lets you adjust
-weights and overlay visibility, and lets you copy coordinates to Google Maps.
+app.py
+Veil Finder - Streamlit observation logging and location scoring app.
 
 Run:
-    streamlit run field_app.py
+    streamlit run app.py
+    (or: python -m streamlit run app.py)
 """
+
 import os
 import sys
 import json
+import uuid
 import glob
 import base64
-
+import subprocess
 import numpy as np
 import pandas as pd
 import plotly.express as px
 import plotly.graph_objects as go
 import streamlit as st
+from datetime import date, time, datetime
 
-
-# ── Backend imports (no importlib.reload – breaks Streamlit Cloud cold starts) ─
+# ── Backend path ─────────────────────────────────────────────────────────────
 _HERE = os.path.dirname(os.path.abspath(__file__))
 sys.path.insert(0, os.path.join(_HERE, "backend"))
-
-from scorer import (
-    score_all_observations,
-    compute_plant_scores,
-    score_cloud_observations,
-    score_contrast_observations,
-    haversine_distance,
+import scorer
+from scorer  import (
+    score_all_observations, get_point_diagnostics, scores_to_geojson,
+    compute_plant_scores, detect_high_contrast_days, score_contrast_observations,
 )
-import importlib
 import osm_client
-importlib.reload(osm_client)
 from osm_client import fetch_parks_osm
-from fetcher import load_master_csv
+import inaturalist_client
+import fetcher
+from fetcher import smart_fetch, get_missing_data_points, load_master_csv
 from grid_utils import generate_grid
+import geometry_utils
 from geometry_utils import get_rotated_corners
+from PIL import Image, ImageDraw
+from streamlit_image_coordinates import streamlit_image_coordinates
 
-# ── Constants ──────────────────────────────────────────────────────────────────
+# ── Constants ─────────────────────────────────────────────────────────────────
 HUNTS_DIR = os.path.join(_HERE, "hunts")
 
-SCORE_COLORSCALE = [
-    [0.00, "rgba(60,60,70,0.35)"],
-    [0.40, "rgba(60,60,70,0.35)"],
-    [0.55, "#e8c830"],
-    [0.72, "#ff7b00"],
-    [0.88, "#ff2800"],
-    [1.00, "#ff0055"],
-]
-
-# ── Page config ────────────────────────────────────────────────────────────────
-st.set_page_config(
-    page_title="Veil Finder Field",
-    page_icon="🌫️",
-    layout="wide",
-    initial_sidebar_state="expanded",
-)
-st.markdown("""
-<style>
-  /* ── Mobile-first base ─────────────────────────────────────── */
-  html, body { touch-action: manipulation; }
-
-  .block-container {
-      padding-top: 2rem;
-      padding-bottom: 4rem;
-      padding-left: 0.75rem !important;
-      padding-right: 0.75rem !important;
-      max-width: 100% !important;
-  }
-
-  /* ── Typography — readable outdoors ───────────────────────── */
-  html { font-size: 16px; }
-  p, li, .stCaption, label { font-size: 1rem !important; line-height: 1.55; }
-  h1 { font-size: 1.6rem !important; }
-  h2 { font-size: 1.3rem !important; }
-  h3 { font-size: 1.1rem !important; }
-
-  /* ── Touch-friendly buttons ─────────────────────────────────── */
-  .stButton > button {
-      min-height: 52px !important;
-      font-size: 1rem !important;
-      border-radius: 10px !important;
-      width: 100% !important;
-  }
-
-  /* ── Touch-friendly sliders ─────────────────────────────────── */
-  div[data-testid="stSlider"] > div { padding-top: 0.5rem; padding-bottom: 0.5rem; }
-  div[data-testid="stSlider"] span[data-testid="stThumbValue"] { font-size: 1rem !important; }
-
-  /* ── Bigger selectbox / radio ───────────────────────────────── */
-  div[data-testid="stSelectbox"] select,
-  div[data-baseweb="select"] { min-height: 48px !important; font-size: 1rem !important; }
-  div[data-testid="stRadio"] label { font-size: 1rem !important; padding: 0.4rem 0; }
-
-  /* ── Metric cards ───────────────────────────────────────────── */
-  div[data-testid="stMetric"] {
-      background: #161b22;
-      border: 1px solid #30363d;
-      border-radius: 10px;
-      padding: 0.7rem 1rem;
-  }
-  div[data-testid="stMetricValue"] { font-size: 1.4rem !important; }
-  div[data-testid="stMetricLabel"] { font-size: 0.8rem !important; }
-
-  /* ── Data table ─────────────────────────────────────────────── */
-  div[data-testid="stDataFrame"] {
-      border: 1px solid #30363d;
-      border-radius: 10px;
-      overflow-x: auto;
-      -webkit-overflow-scrolling: touch;
-  }
-
-  /* ── Alert / info boxes ─────────────────────────────────────── */
-  .stAlert { border-radius: 10px; }
-
-  /* ── Success / code box for coords ─────────────────────────── */
-  .stSuccess { font-size: 1.1rem !important; }
-  div[data-testid="stCode"] {
-      font-size: 1.15rem !important;
-      border-radius: 10px;
-      letter-spacing: 0.04em;
-  }
-
-  /* ── Google Maps link — make it a big tap target ────────────── */
-  a[href*="google.com/maps"] {
-      display: inline-block;
-      background: #1a7f37;
-      color: #fff !important;
-      padding: 0.75rem 1.4rem;
-      border-radius: 10px;
-      font-size: 1.05rem;
-      font-weight: 600;
-      text-decoration: none;
-      margin-top: 0.5rem;
-  }
-  a[href*="google.com/maps"]:hover { background: #238f40; }
-
-  /* ── Sidebar ─────────────────────────────────────────────────── */
-  section[data-testid="stSidebar"] { min-width: 270px !important; }
-  section[data-testid="stSidebar"] .stButton > button { min-height: 48px !important; }
-
-  /* ── Horizontal rule ────────────────────────────────────────── */
-  hr { border-color: #30363d; margin: 1.4rem 0; }
-
-  /* ── Expander headers ─────────────────────────────────────── */
-  div[data-testid="stExpander"] summary {
-      font-size: 1rem !important;
-      padding: 0.6rem 0;
-  }
-
-  /* ── Prevent table overflow on narrow screens ─────────────── */
-  .element-container { max-width: 100% !important; }
-</style>
-""", unsafe_allow_html=True)
-
-# ── Path helpers ───────────────────────────────────────────────────────────────
+# Helpers to get current hunt paths
 def get_hunt_dir() -> str:
-    return os.path.join(HUNTS_DIR, st.session_state.get("current_hunt", "veil_eight"))
-
-def get_settings_file() -> str:
-    return os.path.join(get_hunt_dir(), "settings.json")
-
-def get_export_dir() -> str:
-    return os.path.join(get_hunt_dir(), "scans_export")
-
-def get_master_parquet() -> str:
-    return os.path.join(get_export_dir(), "fog_master.parquet")
+    hunt = st.session_state.get("current_hunt", "veil_eight")
+    return os.path.join(HUNTS_DIR, hunt)
 
 def get_obs_file() -> str:
     return os.path.join(get_hunt_dir(), "observations.json")
@@ -181,47 +60,198 @@ def get_contrast_obs_file() -> str:
 def get_plants_file() -> str:
     return os.path.join(get_hunt_dir(), "plants.json")
 
-# ── I/O helpers ────────────────────────────────────────────────────────────────
-def load_json(path: str, default):
-    if os.path.exists(path):
+def get_export_dir() -> str:
+    return os.path.join(get_hunt_dir(), "scans_export")
+
+def get_master_parquet() -> str:
+    return os.path.join(get_export_dir(), "fog_master.parquet")
+
+def get_settings_file() -> str:
+    return os.path.join(get_hunt_dir(), "settings.json")
+
+CENTER     = {"lat": 40.31, "lon": -75.13}
+
+# Preferred master Parquet — created/updated by the in-app fetcher
+_MASTER_PARQUET = get_master_parquet()
+
+SCORE_COLORSCALE = [
+    [0.00, "rgba(60,60,70,0.35)"],
+    [0.40, "rgba(60,60,70,0.35)"],
+    [0.55, "#e8c830"],
+    [0.72, "#ff7b00"],
+    [0.88, "#ff2800"],
+    [1.00, "#ff0055"],
+]
+
+# ── Page config ───────────────────────────────────────────────────────────────
+st.set_page_config(
+    page_title="Veil Finder",
+    page_icon="fog",
+    layout="wide",
+    initial_sidebar_state="expanded",
+)
+
+# ── Custom CSS ────────────────────────────────────────────────────────────────
+st.markdown("""
+<style>
+    .block-container { padding-top: 3.5rem; padding-bottom: 2rem; }
+    div[data-testid="stMetric"] {
+        background: #161b22;
+        border: 1px solid #30363d;
+        border-radius: 8px;
+        padding: 0.6rem 1rem;
+    }
+    div[data-testid="stMetricValue"] { font-size: 1.5rem; }
+    .section-header {
+        font-size: 0.78rem;
+        font-weight: 600;
+        letter-spacing: 0.08em;
+        text-transform: uppercase;
+        color: #8b949e;
+        margin-bottom: 0.4rem;
+        margin-top: 1rem;
+    }
+    div[data-testid="stDataFrame"] { border: 1px solid #30363d; border-radius: 8px; }
+    .stAlert { border-radius: 8px; }
+    .obs-badge-fog   { background:#0d2b3e; color:#00e5ff; border-radius:4px; padding:2px 8px; font-size:0.82rem; }
+    .obs-badge-clear { background:#1a2a1a; color:#4ade80; border-radius:4px; padding:2px 8px; font-size:0.82rem; }
+    hr { border-color: #30363d; margin: 1.2rem 0; }
+</style>
+""", unsafe_allow_html=True)
+
+# ── Observation I/O ───────────────────────────────────────────────────────────
+def load_observations() -> list[dict]:
+    fpath = get_obs_file()
+    if os.path.exists(fpath):
         try:
-            with open(path, "r", encoding="utf-8") as f:
+            with open(fpath, "r", encoding="utf-8") as f:
                 return json.load(f)
         except Exception:
-            pass
-    return default
+            return []
+    return []
+
+
+def save_observations(obs_list: list[dict]) -> None:
+    fpath = get_obs_file()
+    os.makedirs(os.path.dirname(fpath), exist_ok=True)
+    with open(fpath, "w", encoding="utf-8") as f:
+        json.dump(obs_list, f, indent=2)
+
+
+def load_cloud_observations() -> list[dict]:
+    fpath = get_cloud_obs_file()
+    if os.path.exists(fpath):
+        try:
+            with open(fpath, "r", encoding="utf-8") as f:
+                return json.load(f)
+        except Exception:
+            return []
+    return []
+
+
+def save_cloud_observations(obs_list: list[dict]) -> None:
+    fpath = get_cloud_obs_file()
+    os.makedirs(os.path.dirname(fpath), exist_ok=True)
+    with open(fpath, "w", encoding="utf-8") as f:
+        json.dump(obs_list, f, indent=2)
+
+
+def load_contrast_observations() -> list[dict]:
+    fpath = get_contrast_obs_file()
+    if os.path.exists(fpath):
+        try:
+            with open(fpath, "r", encoding="utf-8") as f:
+                return json.load(f)
+        except Exception:
+            return []
+    return []
+
+
+def save_contrast_observations(obs_list: list[dict]) -> None:
+    fpath = get_contrast_obs_file()
+    os.makedirs(os.path.dirname(fpath), exist_ok=True)
+    with open(fpath, "w", encoding="utf-8") as f:
+        json.dump(obs_list, f, indent=2)
+
+
+def load_plants() -> dict:
+    fpath = get_plants_file()
+    if os.path.exists(fpath):
+        try:
+            with open(fpath, "r", encoding="utf-8") as f:
+                return json.load(f)
+        except Exception:
+            return {}
+    return {}
+
+
+def save_plants(selected: list, obs_dict: dict) -> None:
+    fpath = get_plants_file()
+    os.makedirs(os.path.dirname(fpath), exist_ok=True)
+    with open(fpath, "w", encoding="utf-8") as f:
+        json.dump({"selected_plants": selected, "plant_obs_dict": obs_dict}, f, indent=2)
+
 
 def load_settings() -> dict:
-    return load_json(get_settings_file(), {})
+    fpath = get_settings_file()
+    if os.path.exists(fpath):
+        try:
+            with open(fpath, "r", encoding="utf-8") as f:
+                return json.load(f)
+        except Exception:
+            st.warning("settings.json could not be parsed — using defaults.")
+    return {}
 
-def save_settings(d: dict) -> None:
+def save_settings(settings: dict) -> None:
     fpath = get_settings_file()
     os.makedirs(os.path.dirname(fpath), exist_ok=True)
     with open(fpath, "w", encoding="utf-8") as f:
-        json.dump(d, f, indent=2)
+        json.dump(settings, f, indent=2)
 
-def get_hunts() -> list:
-    os.makedirs(HUNTS_DIR, exist_ok=True)
-    return [d for d in os.listdir(HUNTS_DIR)
-            if os.path.isdir(os.path.join(HUNTS_DIR, d)) and not d.startswith(".")]
-
-def invalidate_scores():
+def invalidate_scores() -> None:
+    """Clear cached scores so they are recomputed on next access."""
     st.session_state.scores = None
 
-# ── Session state init ─────────────────────────────────────────────────────────
-if "current_hunt" not in st.session_state:
-    st.session_state.current_hunt = get_hunts()[0] if get_hunts() else "veil_eight"
 
-_settings = load_settings()
+# ── Session state init ────────────────────────────────────────────────────────
+if "current_hunt" not in st.session_state:
+    st.session_state.current_hunt = "veil_eight"
+if "observations" not in st.session_state:
+    st.session_state.observations = load_observations()
+if "scores" not in st.session_state:
+    st.session_state.scores = None
+if "fog_threshold" not in st.session_state:
+    st.session_state.fog_threshold = 5
+if "selected_csv" not in st.session_state:
+    st.session_state.selected_csv = None
+_saved_settings = load_settings()
 
 if "grid_center_lat" not in st.session_state:
-    st.session_state.grid_center_lat = _settings.get("grid_center_lat", 40.31)
+    st.session_state.grid_center_lat = _saved_settings.get("grid_center_lat", 40.31)
 if "grid_center_lon" not in st.session_state:
-    st.session_state.grid_center_lon = _settings.get("grid_center_lon", -75.13)
+    st.session_state.grid_center_lon = _saved_settings.get("grid_center_lon", -75.13)
 if "grid_radius_mi" not in st.session_state:
-    st.session_state.grid_radius_mi  = _settings.get("grid_radius_mi", 40.0)
-if "map_transparency" not in st.session_state:
-    st.session_state.map_transparency = 20
+    st.session_state.grid_radius_mi = _saved_settings.get("grid_radius_mi", 40.0)
+if "map_opacity" not in st.session_state:
+    st.session_state.map_opacity = 80
+_plants_data = load_plants()
+if "selected_plants" not in st.session_state:
+    st.session_state.selected_plants = _plants_data.get("selected_plants", [])
+if "plant_obs_dict" not in st.session_state:
+    st.session_state.plant_obs_dict = _plants_data.get("plant_obs_dict", {})
+if "plant_influence_radius" not in st.session_state:
+    st.session_state.plant_influence_radius = 3.0
+if "plant_match_mode" not in st.session_state:
+    st.session_state.plant_match_mode = "Any"
+if "show_plant_pins" not in st.session_state:
+    st.session_state.show_plant_pins = True
+if "map_color_by" not in st.session_state:
+    st.session_state.map_color_by = "Combined Score"
+if "cloud_obs_list" not in st.session_state:
+    st.session_state.cloud_obs_list = load_cloud_observations()
+if "contrast_obs_list" not in st.session_state:
+    st.session_state.contrast_obs_list = load_contrast_observations()
+# Combined Score component weights
 if "weight_fog" not in st.session_state:
     st.session_state.weight_fog = 10
 if "weight_plant" not in st.session_state:
@@ -230,763 +260,782 @@ if "weight_cloud" not in st.session_state:
     st.session_state.weight_cloud = 10
 if "weight_contrast" not in st.session_state:
     st.session_state.weight_contrast = 10
-if "fog_threshold" not in st.session_state:
-    st.session_state.fog_threshold = 10
-if "plant_match_mode" not in st.session_state:
-    st.session_state.plant_match_mode = "All"
-if "scores" not in st.session_state:
-    st.session_state.scores = None
-if "map_overlays" not in st.session_state:
-    st.session_state.map_overlays = _settings.get("map_overlays", [])
 
-# Load observations + plant data
-_obs = load_json(get_obs_file(), [])
-if "observations" not in st.session_state:
-    st.session_state.observations = _obs
 
-_cloud_obs = load_json(get_cloud_obs_file(), [])
-if "cloud_obs_list" not in st.session_state:
-    st.session_state.cloud_obs_list = _cloud_obs
+# ── Combined Score recompute helper ───────────────────────────────────────────
+def recompute_combined(scores_df: pd.DataFrame) -> pd.DataFrame:
+    """
+    Rebuild CombinedScore from individual score columns using the current
+    session state toggles (combine_plant, combine_cloud, combine_contrast).
+    Always uses MatchRate as the base. Individual score columns are unchanged.
+    """
+    if scores_df is None or scores_df.empty:
+        return scores_df
 
-_contrast_obs = load_json(get_contrast_obs_file(), [])
-if "contrast_obs_list" not in st.session_state:
-    st.session_state.contrast_obs_list = _contrast_obs
-
-_plants_data = load_json(get_plants_file(), {})
-if "plant_obs_dict" not in st.session_state:
-    st.session_state.plant_obs_dict = _plants_data.get("plant_obs_dict", {})
-
-# Auto-select master parquet
-if "selected_csv" not in st.session_state:
-    mp = get_master_parquet()
-    st.session_state.selected_csv = mp if os.path.exists(mp) else None
-
-# ── Data loading ───────────────────────────────────────────────────────────────
-@st.cache_data(show_spinner=False)
-def load_fog_data(path: str, mtime: float) -> pd.DataFrame:
-    if path.endswith(".parquet"):
-        df = pd.read_parquet(path)
+    df = scores_df.copy()
+    # Compute min-max normalized MatchRate for the base
+    mr = df.get("MatchRate", pd.Series(1.0, index=df.index)).fillna(0.0)
+    if mr.max() > mr.min():
+        mr_scaled = (mr - mr.min()) / (mr.max() - mr.min())
     else:
-        df = pd.read_csv(path)
-    if "Timestamp" in df.columns and not pd.api.types.is_datetime64_any_dtype(df["Timestamp"]):
-        df["Timestamp"] = pd.to_datetime(df["Timestamp"], errors="coerce")
-    return df
+        mr_scaled = mr.copy()
 
-def get_fog_df():
-    p = st.session_state.selected_csv
-    if p and os.path.exists(p):
-        return load_fog_data(p, os.path.getmtime(p))
-    return None
-
-# ── Scoring ────────────────────────────────────────────────────────────────────
-def recompute_combined(df: pd.DataFrame) -> pd.DataFrame:
-    if df is None or df.empty:
-        return df
-    df = df.copy()
-    mr = df.get("MatchRate", pd.Series(0.0, index=df.index)).fillna(0.0)
-    mr_scaled = (mr - mr.min()) / (mr.max() - mr.min()) if mr.max() > mr.min() else mr.copy()
-
-    total_w = float(st.session_state.weight_fog)
-    raw = mr_scaled * total_w
+    total_weight = float(st.session_state.weight_fog)
+    combined_raw = mr_scaled * st.session_state.weight_fog
 
     if "PlantScore" in df.columns:
-        raw += df["PlantScore"].fillna(0.0) * st.session_state.weight_plant
-        total_w += st.session_state.weight_plant
+        combined_raw += df["PlantScore"].fillna(0.0) * st.session_state.weight_plant
+        total_weight += st.session_state.weight_plant
     if "CloudScore" in df.columns:
-        raw += df["CloudScore"].fillna(0.0) * st.session_state.weight_cloud
-        total_w += st.session_state.weight_cloud
+        combined_raw += df["CloudScore"].fillna(0.0) * st.session_state.weight_cloud
+        total_weight += st.session_state.weight_cloud
     if "ContrastScore" in df.columns:
-        raw += df["ContrastScore"].fillna(0.0) * st.session_state.weight_contrast
-        total_w += st.session_state.weight_contrast
+        combined_raw += df["ContrastScore"].fillna(0.0) * st.session_state.weight_contrast
+        total_weight += st.session_state.weight_contrast
 
-    df["CombinedScore"] = (raw / total_w if total_w > 0 else raw * 0.0).fillna(0.0)
+    if total_weight > 0:
+        combined = combined_raw / total_weight
+    else:
+        combined = combined_raw * 0.0
+
+    df["CombinedScore"] = combined.fillna(0.0)
     return df.sort_values("CombinedScore", ascending=False).reset_index(drop=True)
 
-def get_scores():
-    if st.session_state.scores is not None:
-        return st.session_state.scores
 
+# ── Fog data loader (cached) ──────────────────────────────────────────────────
+@st.cache_data(show_spinner=False)
+def load_fog_data(file_path: str, mtime: float) -> pd.DataFrame:
+    if file_path.endswith('.parquet'):
+        df = pd.read_parquet(file_path)
+    else:
+        df = pd.read_csv(file_path, parse_dates=["Timestamp"])
+    
+    if "Timestamp" in df.columns and not pd.api.types.is_datetime64_any_dtype(df["Timestamp"]):
+        df["Timestamp"] = pd.to_datetime(df["Timestamp"])
+    return df
+
+
+def get_fog_df() -> pd.DataFrame | None:
+    if st.session_state.selected_csv and os.path.exists(st.session_state.selected_csv):
+        mtime = os.path.getmtime(st.session_state.selected_csv)
+        return load_fog_data(st.session_state.selected_csv, mtime)
+    return None
+
+
+# ── Score computation (lazy, cached in session_state) ─────────────────────────
+def get_scores() -> pd.DataFrame | None:
     fog_df = get_fog_df()
-    if not st.session_state.observations:
-        return None
+    if st.session_state.scores is None:
+        if st.session_state.observations:
+            with st.spinner("Computing location scores for the current grid..."):
+                current_grid = list(set(generate_grid(
+                    center_lat=st.session_state.grid_center_lat,
+                    center_lon=st.session_state.grid_center_lon,
+                    radius_km=st.session_state.grid_radius_mi * 1.60934
+                )))
+                
+                # Create the full grid DataFrame
+                grid_df = pd.DataFrame(current_grid, columns=["Lat_g", "Lon_g"])
+                grid_df["Lat"] = grid_df["Lat_g"]
+                grid_df["Lon"] = grid_df["Lon_g"]
+                
+                base_scores = pd.DataFrame()
+                
+                if fog_df is not None and not fog_df.empty:
+                    # Optimize memory: round Lat/Lon on the fly without duplicating the massive dataframe
+                    temp_grid = grid_df.copy()
+                    
+                    # Instead of an inner merge that duplicates data, we filter fog_df by checking if rounded coordinates are in the grid
+                    grid_set = set(zip(temp_grid["Lat_g"], temp_grid["Lon_g"]))
+                    
+                    fog_mask = pd.Series(list(zip(fog_df["Lat"].round(4), fog_df["Lon"].round(4)))).isin(grid_set)
+                    filtered_df = fog_df[fog_mask.values].copy()
+                    
+                    # Ensure Lat_g and Lon_g exist for the downstream logic
+                    filtered_df["Lat_g"] = filtered_df["Lat"].round(4)
+                    filtered_df["Lon_g"] = filtered_df["Lon"].round(4)
+                    
+                    # Clean up the merge artifacts so score_all_observations sees exact Lat/Lon
+                    # Some merges create Lat_x, Lon_x if there's overlap. Let's explicitly ensure Lat, Lon are from fog_df
+                    if "Lat_x" in filtered_df.columns:
+                        filtered_df = filtered_df.rename(columns={"Lat_x": "Lat", "Lon_x": "Lon"})
+                    
+                    raw_fog_scores = score_all_observations(
+                        st.session_state.observations,
+                        filtered_df,
+                        fog_threshold=st.session_state.fog_threshold,
+                    )
+                    
+                    if not raw_fog_scores.empty:
+                        raw_fog_scores["Lat_g"] = raw_fog_scores["Lat"].round(4)
+                        raw_fog_scores["Lon_g"] = raw_fog_scores["Lon"].round(4)
+                        raw_fog_scores = raw_fog_scores.drop(columns=["Lat", "Lon"])
+                        
+                        base_scores = pd.merge(grid_df, raw_fog_scores, on=["Lat_g", "Lon_g"], how="left")
+                        base_scores = base_scores.drop(columns=["Lat_g", "Lon_g"])
+                    else:
+                        base_scores = grid_df.drop(columns=["Lat_g", "Lon_g"])
+                else:
+                    base_scores = grid_df.drop(columns=["Lat_g", "Lon_g"])
+                
+                # Ensure missing columns are populated
+                if "MatchRate" not in base_scores.columns:
+                    base_scores["MatchRate"] = np.nan
+                    base_scores["Confidence_Z"] = np.nan
+                    base_scores["Matches"] = 0
+                    base_scores["ObsCount"] = len(st.session_state.observations)
+                    
+                if "Elevation_m" not in base_scores.columns:
+                    base_scores["Elevation_m"] = np.nan
+                    base_scores["IsValley"] = False
+                
+                st.session_state.scores = compute_plant_scores(
+                    base_scores,
+                    st.session_state.plant_obs_dict,
+                    influence_radius_mi=st.session_state.plant_influence_radius,
+                    match_mode=st.session_state.plant_match_mode
+                )
+                
+                # Score Cloud Differential
+                st.session_state.scores = scorer.score_cloud_observations(
+                    st.session_state.scores,
+                    st.session_state.cloud_obs_list,
+                    fog_df
+                )
 
-    with st.spinner("Computing scores…"):
-        current_grid = list(set(generate_grid(
-            center_lat=st.session_state.grid_center_lat,
-            center_lon=st.session_state.grid_center_lon,
-            radius_km=st.session_state.grid_radius_mi * 1.60934,
-        )))
-        grid_df = pd.DataFrame(current_grid, columns=["Lat_g", "Lon_g"])
-        grid_df["Lat"] = grid_df["Lat_g"]
-        grid_df["Lon"] = grid_df["Lon_g"]
-
-        base_scores = pd.DataFrame()
-
-        if fog_df is not None and not fog_df.empty:
-            grid_set = set(zip(grid_df["Lat_g"], grid_df["Lon_g"]))
-            fog_mask = pd.Series(
-                list(zip(fog_df["Lat"].round(4), fog_df["Lon"].round(4)))
-            ).isin(grid_set)
-            filtered = fog_df[fog_mask.values].copy()
-            filtered["Lat_g"] = filtered["Lat"].round(4)
-            filtered["Lon_g"] = filtered["Lon"].round(4)
-
-            raw = score_all_observations(
-                st.session_state.observations,
-                filtered,
-                fog_threshold=st.session_state.fog_threshold,
-            )
-            if not raw.empty:
-                raw["Lat_g"] = raw["Lat"].round(4)
-                raw["Lon_g"] = raw["Lon"].round(4)
-                raw = raw.drop(columns=["Lat", "Lon"])
-                base_scores = pd.merge(grid_df, raw, on=["Lat_g", "Lon_g"], how="left")
-                base_scores = base_scores.drop(columns=["Lat_g", "Lon_g"])
-            else:
-                base_scores = grid_df.drop(columns=["Lat_g", "Lon_g"])
-        else:
-            base_scores = grid_df.drop(columns=["Lat_g", "Lon_g"])
-
-        if "MatchRate" not in base_scores.columns:
-            base_scores["MatchRate"]    = np.nan
-            base_scores["Confidence_Z"] = np.nan
-            base_scores["Matches"]      = 0
-            base_scores["ObsCount"]     = len(st.session_state.observations)
-        if "Elevation_m" not in base_scores.columns:
-            base_scores["Elevation_m"] = np.nan
-            base_scores["IsValley"]    = False
-
-        base_scores = compute_plant_scores(
-            base_scores,
-            st.session_state.plant_obs_dict,
-            influence_radius_mi=3.0,
-            match_mode=st.session_state.plant_match_mode,
-        )
-        base_scores = score_cloud_observations(
-            base_scores, st.session_state.cloud_obs_list, fog_df
-        )
-        base_scores = score_contrast_observations(
-            base_scores, st.session_state.contrast_obs_list, fog_df
-        )
-
-    st.session_state.scores = base_scores
+                # Score High-Contrast Cloud Days
+                st.session_state.scores = score_contrast_observations(
+                    st.session_state.scores,
+                    st.session_state.contrast_obs_list,
+                    fog_df
+                )
     return st.session_state.scores
 
-# ── Switch hunt helper ─────────────────────────────────────────────────────────
-def switch_hunt(name: str):
-    st.session_state.current_hunt   = name
-    st.session_state.observations   = load_json(get_obs_file(), [])
-    st.session_state.cloud_obs_list = load_json(get_cloud_obs_file(), [])
-    st.session_state.contrast_obs_list = load_json(get_contrast_obs_file(), [])
-    _s = load_settings()
-    st.session_state.grid_center_lat = _s.get("grid_center_lat", 40.31)
-    st.session_state.grid_center_lon = _s.get("grid_center_lon", -75.13)
-    st.session_state.grid_radius_mi  = _s.get("grid_radius_mi", 40.0)
-    st.session_state.map_overlays    = _s.get("map_overlays", [])
-    mp = get_master_parquet()
-    st.session_state.selected_csv    = mp if os.path.exists(mp) else None
+
+def get_hunts() -> list[str]:
+    os.makedirs(HUNTS_DIR, exist_ok=True)
+    return [d for d in os.listdir(HUNTS_DIR) if os.path.isdir(os.path.join(HUNTS_DIR, d)) and not d.startswith(".")]
+
+def switch_hunt(new_hunt: str):
+    st.session_state.current_hunt = new_hunt
+    st.session_state.observations = load_observations()
+    st.session_state.cloud_obs_list = load_cloud_observations()
+    st.session_state.contrast_obs_list = load_contrast_observations()
+    _new_settings = load_settings()
+    st.session_state.grid_center_lat = _new_settings.get("grid_center_lat", 40.31)
+    st.session_state.grid_center_lon = _new_settings.get("grid_center_lon", -75.13)
+    st.session_state.grid_radius_mi = _new_settings.get("grid_radius_mi", 40.0)
+    st.session_state.selected_csv = get_master_parquet() if os.path.exists(get_master_parquet()) else None
     invalidate_scores()
 
-# ══════════════════════════════════════════════════════════════════════════════
+# ─────────────────────────────────────────────────────────────────────────────
+# ─────────────────────────────────────────────────────────────────────────────
 # SIDEBAR
-# ══════════════════════════════════════════════════════════════════════════════
+# ─────────────────────────────────────────────────────────────────────────────
 with st.sidebar:
-    st.markdown("# 🌫️ Veil Finder")
-    st.caption("Field viewer — read only")
-    st.markdown("---")
-
-    # ── Hunt selector ──────────────────────────────────────────────────────────
+    st.markdown("# Veil Finder Mobile")
+    st.caption("Read-only field viewer")
+    # ── Hunt Selector ──
+    st.markdown('<p class="section-header">Active Hunt / Project</p>', unsafe_allow_html=True)
     hunts = get_hunts()
     if st.session_state.current_hunt not in hunts:
         hunts.append(st.session_state.current_hunt)
-    sel = st.selectbox("Active Hunt", hunts,
-                       index=hunts.index(st.session_state.current_hunt))
-    if sel != st.session_state.current_hunt:
-        switch_hunt(sel)
+        
+    selected_hunt = st.selectbox(
+        "Hunt", hunts, index=hunts.index(st.session_state.current_hunt), label_visibility="collapsed"
+    )
+    if selected_hunt != st.session_state.current_hunt:
+        switch_hunt(selected_hunt)
         st.rerun()
+        
+    with st.expander("➕ Create New Hunt", expanded=False):
+        new_hunt_name = st.text_input("New Hunt Name", placeholder="e.g. veil_nine")
+        if st.button("Create", use_container_width=True) and new_hunt_name:
+            # Basic sanitization
+            new_hunt_clean = "".join(c for c in new_hunt_name if c.isalnum() or c in ("_", "-"))
+            if new_hunt_clean and new_hunt_clean not in hunts:
+                os.makedirs(os.path.join(HUNTS_DIR, new_hunt_clean), exist_ok=True)
+                switch_hunt(new_hunt_clean)
+                st.rerun()
 
     st.markdown("---")
+    with st.expander("⚖️ Combined Score Weights", expanded=False):
+        st.caption(
+            "Adjust how much influence each layer has on the **Combined Score**. "
+            "Set a weight to 0 to completely exclude that layer."
+        )
 
-    # ── Score weights ──────────────────────────────────────────────────────────
-    with st.expander("⚖️ Score Weights", expanded=True):
-        st.caption("Drag sliders to rebalance which layers matter most.")
         _changed = False
-
-        _nf = st.slider("🌫️ Fog Match Rate", 0, 10,
-                        int(st.session_state.weight_fog), key="fa_wfog")
-        if _nf != st.session_state.weight_fog:
-            st.session_state.weight_fog = _nf
+        
+        # Fog Match Rate is always available
+        _new_fog = st.slider("🌫️ Fog Match Rate", 0, 10, st.session_state.weight_fog, key="sl_weight_fog")
+        if _new_fog != st.session_state.weight_fog:
+            st.session_state.weight_fog = _new_fog
             _changed = True
 
-        if st.session_state.plant_obs_dict:
-            _np = st.slider("🌿 Plant Proximity", 0, 10,
-                            int(st.session_state.weight_plant), key="fa_wplant")
-            if _np != st.session_state.weight_plant:
-                st.session_state.weight_plant = _np
-                _changed = True
+        _has_plant    = bool(st.session_state.selected_plants)
+        _has_cloud    = bool(st.session_state.cloud_obs_list)
+        _has_contrast = bool(st.session_state.contrast_obs_list)
 
-        if st.session_state.cloud_obs_list:
-            _nc = st.slider("⛅ Cloud Differential", 0, 10,
-                            int(st.session_state.weight_cloud), key="fa_wcloud")
-            if _nc != st.session_state.weight_cloud:
-                st.session_state.weight_cloud = _nc
+        if _has_plant:
+            _new_plant = st.slider("🌿 Plant Proximity Score", 0, 10, st.session_state.weight_plant, key="sl_weight_plant")
+            if _new_plant != st.session_state.weight_plant:
+                st.session_state.weight_plant = _new_plant
                 _changed = True
-
-        if st.session_state.contrast_obs_list:
-            _nk = st.slider("⚡ Contrast Score", 0, 10,
-                            int(st.session_state.weight_contrast), key="fa_wcontrast")
-            if _nk != st.session_state.weight_contrast:
-                st.session_state.weight_contrast = _nk
+        if _has_cloud:
+            _new_cloud = st.slider("⛅ Cloud Differential Score", 0, 10, st.session_state.weight_cloud, key="sl_weight_cloud")
+            if _new_cloud != st.session_state.weight_cloud:
+                st.session_state.weight_cloud = _new_cloud
                 _changed = True
-
+        if _has_contrast:
+            _new_contrast = st.slider("⚡ High-Contrast Cloud Score", 0, 10, st.session_state.weight_contrast, key="sl_weight_contrast")
+            if _new_contrast != st.session_state.weight_contrast:
+                st.session_state.weight_contrast = _new_contrast
+                _changed = True
+                
         if _changed:
             st.rerun()
 
-    # ── Fog threshold ──────────────────────────────────────────────────────────
-    with st.expander("🌫️ Fog Threshold", expanded=False):
-        _thresh_choice = st.radio(
-            "Fog detection threshold",
-            ["Moderate  (Score >= 5)", "Confirmed  (Score >= 10)"],
-            index=0 if st.session_state.fog_threshold == 5 else 1,
-            key="fa_thresh",
-            label_visibility="collapsed",
-        )
-        _new_thresh = 5 if "5" in _thresh_choice else 10
-        if _new_thresh != st.session_state.fog_threshold:
-            st.session_state.fog_threshold = _new_thresh
-            invalidate_scores()
-            st.rerun()
 
-    # ── Plant match mode ───────────────────────────────────────────────────────
-    if st.session_state.plant_obs_dict and len(st.session_state.plant_obs_dict) > 1:
-        with st.expander("🌿 Plant Match Strategy", expanded=False):
-            _match_choice = st.radio(
-                "Plant match mode",
-                ["Match Any (Either plant is nearby)", "Match All (All plants must be nearby)"],
-                index=0 if st.session_state.plant_match_mode == "Any" else 1,
-                key="fa_match_mode",
-                label_visibility="collapsed",
-            )
-            _new_mode = "Any" if "Any" in _match_choice else "All"
-            if _new_mode != st.session_state.plant_match_mode:
-                st.session_state.plant_match_mode = _new_mode
-                invalidate_scores()
-                st.rerun()
-
-    # ── Map display settings ───────────────────────────────────────────────────
     with st.expander("🗺️ Map Settings", expanded=False):
-        _nt = st.slider("Point Transparency (%)", 0, 95,
-                        int(st.session_state.map_transparency), step=5,
-                        key="fa_trans")
-        if _nt != st.session_state.map_transparency:
-            st.session_state.map_transparency = _nt
+        if "map_opacity" not in st.session_state:
+            st.session_state.map_opacity = 80
+        _nt = st.slider(
+            "Point Opacity (%)", 5, 100,
+            int(st.session_state.map_opacity), step=5,
+            key="fa_trans",
+            help="Higher = solid grid points. Lower = more see-through. Image overlay opacity is controlled separately."
+        )
+        if _nt != st.session_state.map_opacity:
+            st.session_state.map_opacity = _nt
             st.rerun()
 
-    # ── Overlays (visibility + opacity only) ──────────────────────────────────
-    if st.session_state.map_overlays:
-        with st.expander("🖼️ Map Overlays", expanded=False):
-            for idx, ov in enumerate(st.session_state.map_overlays):
-                st.markdown(f"**{ov.get('name', f'Overlay {idx+1}')}**")
-                vis = st.checkbox("Visible", value=ov.get("visible", True),
-                                  key=f"fa_ovis_{idx}")
-                if vis != ov.get("visible", True):
-                    st.session_state.map_overlays[idx]["visible"] = vis
-                    _s2 = load_settings()
-                    _s2["map_overlays"] = st.session_state.map_overlays
-                    save_settings(_s2)
+    with st.expander("🖼️ Map Image Overlays", expanded=False):
+        if "map_overlays" not in st.session_state:
+            st.session_state.map_overlays = _saved_settings.get("map_overlays", [])
+        for idx, overlay in enumerate(st.session_state.map_overlays):
+            st.markdown(f"**{overlay['name']}**")
+            vis = st.checkbox("Visible", value=overlay.get("visible", True), key=f"ov_vis_{idx}")
+            if vis != overlay.get("visible", True):
+                overlay["visible"] = vis
+                st.session_state.settings_cache = load_settings()
+                st.session_state.settings_cache["map_overlays"] = st.session_state.map_overlays
+                save_settings(st.session_state.settings_cache)
+                st.rerun()
+            if vis:
+                n_op_pct = st.slider("Overlay Opacity (%)", 0, 100, int(round(float(overlay["opacity"]) * 100)), step=5, key=f"ov_op_{idx}")
+                n_op = n_op_pct / 100.0
+                if n_op != overlay["opacity"]:
+                    overlay["opacity"] = n_op
+                    st.session_state.settings_cache = load_settings()
+                    st.session_state.settings_cache["map_overlays"] = st.session_state.map_overlays
+                    save_settings(st.session_state.settings_cache)
                     st.rerun()
-                if vis:
-                    n_op = st.slider("Opacity", 0.0, 1.0,
-                                     float(ov.get("opacity", 0.5)), step=0.05,
-                                     key=f"fa_oop_{idx}")
-                    if n_op != ov.get("opacity", 0.5):
-                        st.session_state.map_overlays[idx]["opacity"] = n_op
-                        _s2 = load_settings()
-                        _s2["map_overlays"] = st.session_state.map_overlays
-                        save_settings(_s2)
-                        st.rerun()
-                st.markdown("---")
+            st.markdown("---")
 
-    # ── Re-score button ────────────────────────────────────────────────────────
-    st.markdown("---")
-    if st.button("🔄 Re-score", use_container_width=True):
-        invalidate_scores()
-        st.rerun()
-
-    # ── Data status ────────────────────────────────────────────────────────────
-    fog_df_check = get_fog_df()
-    if fog_df_check is not None:
-        st.success(f"✅ Satellite data loaded  ({len(fog_df_check):,} rows)")
-    else:
-        st.warning("⚠️ No satellite data for this hunt")
-    n_obs = len(st.session_state.observations)
-    st.caption(f"{n_obs} fog observations loaded")
-
-# ══════════════════════════════════════════════════════════════════════════════
-# MAIN — MAP VIEW
-# ══════════════════════════════════════════════════════════════════════════════
-st.header("📍 Location Scoring Map")
+# ─── Map View ──────────────────────────────────────────────────────────────
+st.header("Location Scoring Map")
 
 fog_df = get_fog_df()
-
 if fog_df is None:
-    st.warning("No satellite data found for this hunt. "
-               "Make sure the master parquet has been synced from the main app.")
-    st.stop()
+    st.warning("No satellite data found for this hunt.")
+elif not st.session_state.observations:
+    st.info("No observations loaded for this hunt.")
+else:
+    scores = get_scores()
+    if scores is not None and not scores.empty:
+        scores = recompute_combined(scores)
 
-if not st.session_state.observations:
-    st.info("No observations loaded for this hunt. Add fog/clear observations in the main app first.")
-    st.stop()
+        # Summary metrics
+        top1 = scores.iloc[0]
+        m1, m2, m3, m4 = st.columns(4)
+        if st.session_state.selected_plants:
+            m1.metric("Top Suitability Score", f"{top1['CombinedScore']:.2f}")
+            m2.metric("Top Plant Score", f"{top1['PlantScore']:.2f}")
+        else:
+            m1.metric("Top Candidate Match Rate",  f"{top1['MatchRate']:.1%}")
+            m2.metric("Top Candidate Confidence",   f"{top1['Confidence_Z']:+.2f}sigma")
+        m3.metric("Grid Points Scored",         f"{len(scores):,}")
+        m4.metric("Observations Used",          f"{len(st.session_state.observations)}")
 
-scores_raw = get_scores()
-if scores_raw is None or scores_raw.empty:
-    st.info("Scores not yet computed. Hit **Re-score** in the sidebar.")
-    st.stop()
-
-scores = recompute_combined(scores_raw)
-
-# ── Summary metrics ────────────────────────────────────────────────────────────
-m1, m2, m3, m4 = st.columns(4)
-m1.metric("Grid Points", f"{len(scores):,}")
-top1 = scores.iloc[0]
-m2.metric("Top Combined Score", f"{top1.get('CombinedScore', 0.0):.2f}")
-m3.metric("Top Match Rate",     f"{float(top1.get('MatchRate', 0)):.1%}")
-n_fog_obs = sum(1 for o in st.session_state.observations if o.get("fog_observed"))
-m4.metric("Fog Observations", n_fog_obs)
-
-st.markdown("---")
-
-# ── Pinned candidate (read from session state — selectbox is below the map) ─────
-if "fa_pin_idx" not in st.session_state:
-    st.session_state.fa_pin_idx = 0
-
-_pinned_row = scores.iloc[min(st.session_state.fa_pin_idx, len(scores) - 1)]
-_pinned_lat = float(_pinned_row["Lat"])
-_pinned_lon = float(_pinned_row["Lon"])
-_pinned_coords = f"{_pinned_lat:.6f}, {_pinned_lon:.6f}"
-
-# ── Score filter (moved to above the map) ─────────────────────────────────────
-if "fa_score_range" not in st.session_state:
-    st.session_state.fa_score_range = None
-
-# ── Build the map figure ────────────────────────────────────────────────────────
-alpha = 1.0 - (int(st.session_state.map_transparency) / 100.0)
-map_df = scores.copy()
-map_df["MatchRate"] = map_df["MatchRate"].fillna(0.0)
-
-color_col = "CombinedScore" if "CombinedScore" in map_df.columns else "MatchRate"
-_max_score = float(map_df[color_col].max()) if map_df[color_col].notna().any() else 1.0
-
-# ── Render score filter slider and reset button above the map ──────────────────
-_fmin = float(map_df[color_col].min()) if map_df[color_col].notna().any() else 0.0
-_fmax = float(map_df[color_col].max()) if map_df[color_col].notna().any() else 1.0
-_fmax = _fmax if _fmax > _fmin else _fmin + 0.001
-_cur_range = st.session_state.fa_score_range or (round(_fmin, 3), round(_fmax, 3))
-_cur_range = (max(float(_cur_range[0]), _fmin), min(float(_cur_range[1]), _fmax))
-
-col_slider, col_btn = st.columns([5, 1])
-with col_slider:
-    _new_frange = st.slider(
-        f"Filter by {color_col}",
-        min_value=round(_fmin, 3),
-        max_value=round(_fmax, 3),
-        value=_cur_range,
-        step=round((_fmax - _fmin) / 200, 4) or 0.001,
-        help="Drag to hide low or high scoring points on the map.",
-        key="fa_score_filter_above",
-    )
-with col_btn:
-    st.markdown("<div style='height: 28px;'></div>", unsafe_allow_html=True)  # Visual alignment
-    if st.button("Reset filter", use_container_width=True, key="fa_reset_filter_above"):
-        st.session_state.fa_score_range = None
-        st.rerun()
-
-if _new_frange != tuple(st.session_state.fa_score_range or ()):
-    st.session_state.fa_score_range = _new_frange
-    st.rerun()
-
-_frange = _new_frange
-
-# Slim gradient bar — doubles as the legend for map colours
-st.markdown("""
-<div style="margin-bottom:2px;">
-  <span style="font-size:0.78rem;color:#8b949e;">Low</span>
-  <span style="font-size:0.78rem;color:#8b949e;float:right;">High</span>
-</div>
-<div style="height:8px;border-radius:4px;margin-bottom:4px;
-  background:linear-gradient(to right,
-    rgba(60,60,70,0.6) 0%,rgba(60,60,70,0.6) 40%,
-    #e8c830 55%,#ff7b00 72%,#ff2800 88%,#ff0055 100%);
-"></div>
-""", unsafe_allow_html=True)
-
-map_df = map_df[
-    (map_df[color_col].fillna(0.0) >= _frange[0]) &
-    (map_df[color_col].fillna(0.0) <= _frange[1])
-]
-
-if map_df.empty:
-    st.warning("No points match the current score filter — try widening the range below.")
-    st.stop()
-
-# Build hover text
-def make_hover(row):
-    parts = [
-        f"<b>Lat:</b> {row['Lat']:.5f}",
-        f"<b>Lon:</b> {row['Lon']:.5f}",
-        f"<b>Match Rate:</b> {float(row.get('MatchRate', 0)):.1%}",
-    ]
-    if "Elevation_m" in row and not pd.isna(row.get("Elevation_m")):
-        parts.append(f"<b>Elevation:</b> {row['Elevation_m']:.0f} m")
-    if "CombinedScore" in row:
-        parts.append(f"<b>Combined Score:</b> {row['CombinedScore']:.3f}")
-    return "<br>".join(parts)
-
-map_df["hover"] = map_df.apply(make_hover, axis=1)
-
-auto_zoom = float(np.clip(13.5 - np.log2(st.session_state.grid_radius_mi), 3.0, 15.0))
-
-fig = px.scatter_mapbox(
-    map_df,
-    lat="Lat",
-    lon="Lon",
-    color=color_col,
-    color_continuous_scale=SCORE_COLORSCALE,
-    range_color=[0, max(_max_score, 0.01)],
-    zoom=auto_zoom,
-    center={"lat": st.session_state.grid_center_lat,
-            "lon": st.session_state.grid_center_lon},
-    mapbox_style="carto-darkmatter",
-    custom_data=["hover"],
-    opacity=alpha,
-    size_max=8,
-)
-
-fig.update_traces(
-    hovertemplate="%{customdata[0]}<extra></extra>",
-    marker=dict(size=7),
-)
-
-# ── Use persisted click state (separate key from the widget) ──────────────────
-# Streamlit forbids writing to st.session_state[widget_key] directly.
-# Instead we store the last clicked point under non-widget keys.
-if "fa_clicked_lat" not in st.session_state:
-    st.session_state.fa_clicked_lat = None
-if "fa_clicked_lon" not in st.session_state:
-    st.session_state.fa_clicked_lon = None
-
-_clicked_lat = st.session_state.fa_clicked_lat
-_clicked_lon = st.session_state.fa_clicked_lon
-
-# Use whichever is set: map click > pinned candidate
-_active_lat = _clicked_lat if _clicked_lat is not None else _pinned_lat
-_active_lon = _clicked_lon if _clicked_lon is not None else _pinned_lon
-
-# ── OSM Parks trace ────────────────────────────────────────────────────────────
-_parks = fetch_parks_osm(_active_lat, _active_lon)
-if _parks:
-    _park_df = pd.DataFrame(_parks)
-    
-    # Calculate observations within 0.2 miles of each park
-    _park_counts = []
-    for _p in _parks:
-        _count = 0
-        if st.session_state.plant_obs_dict:
-            for _species, _obs_list in st.session_state.plant_obs_dict.items():
-                for _o in _obs_list:
-                    if haversine_distance(_p["lat"], _p["lon"], _o["lat"], _o["lon"]) <= 0.2:
-                        _count += 1
-        _park_counts.append(_count)
-    _park_df["plants_count"] = _park_counts
-    
-    _park_cdata = np.column_stack([
-        _park_df["name"].astype(str).values,
-        _park_df["plants_count"].astype(str).values,
-        _park_df["lat"].map("{:.5f}".format).values,
-        _park_df["lon"].map("{:.5f}".format).values,
-    ])
-    
-    fig.add_trace(go.Scattermapbox(
-        lat=_park_df["lat"],
-        lon=_park_df["lon"],
-        mode="markers",
-        marker=dict(size=12, color="#1a7f37", symbol="circle"),
-        customdata=_park_cdata,
-        hovertemplate=(
-            "<b>🌳 %{customdata[0]}</b><br>"
-            "Plant Observations: %{customdata[1]}<br>"
-            "Location: %{customdata[2]}, %{customdata[3]}"
-            "<extra></extra>"
-        ),
-        name="Parks",
-    ))
-
-# ── Star marker for selected/pinned candidate ──────────────────────────────────
-fig.add_trace(go.Scattermapbox(
-    lat=[_active_lat],
-    lon=[_active_lon],
-    mode="markers",
-    marker=dict(size=18, color="#00e5ff", symbol="star"),
-    hovertext=f"📌 Selected: {_active_lat:.6f}, {_active_lon:.6f}",
-    hoverinfo="text",
-    name="Selected",
-    showlegend=False,
-))
-
-# ── Grid center marker ─────────────────────────────────────────────────────────
-fig.add_trace(go.Scattermapbox(
-    lat=[st.session_state.grid_center_lat],
-    lon=[st.session_state.grid_center_lon],
-    mode="markers+text",
-    marker=dict(size=14, color="white", symbol="star"),
-    text=["Grid Center"],
-    textposition="top right",
-    textfont=dict(color="white", size=11),
-    hoverinfo="text",
-    hovertext=f"Grid Center ({st.session_state.grid_center_lat}, {st.session_state.grid_center_lon})",
-    name="Center",
-    showlegend=False,
-))
-
-# ── Overlays ────────────────────────────────────────────────────────────────────
-mapbox_layers = []
-for ov in st.session_state.map_overlays:
-    if not ov.get("visible", True):
-        continue
-    ov_dir   = os.path.join(get_hunt_dir(), "overlays")
-    ov_path  = os.path.join(ov_dir, os.path.basename(ov.get("name", "")))
-    if not os.path.exists(ov_path):
-        continue
-    with open(ov_path, "rb") as f:
-        b64 = base64.b64encode(f.read()).decode()
-    ext  = os.path.splitext(ov_path)[1].lower()
-    mime = "image/png" if ext == ".png" else "image/jpeg"
-    corners = get_rotated_corners(
-        center_lat=float(ov["lat"]),
-        center_lon=float(ov["lon"]),
-        width_km=float(ov["width"]),
-        height_km=float(ov["height"]),
-        rotation_deg=float(ov["rotation"]),
-        anchor_x=float(ov.get("anchor_x", 0.5)),
-        anchor_y=float(ov.get("anchor_y", 0.5)),
-    )
-    mapbox_layers.append({
-        "sourcetype": "image",
-        "source": f"data:{mime};base64,{b64}",
-        "coordinates": corners,
-        "opacity": float(ov.get("opacity", 0.5)),
-        "below": "traces",
-    })
-
-if mapbox_layers:
-    fig.update_layout(mapbox_layers=mapbox_layers)
-
-# ── Layout ─────────────────────────────────────────────────────────────────────
-grid_rev = f"{st.session_state.grid_center_lat}_{st.session_state.grid_center_lon}_{st.session_state.grid_radius_mi}"
-fig.update_layout(
-    uirevision=grid_rev,
-    paper_bgcolor="#0d1117",
-    plot_bgcolor="#0d1117",
-    margin=dict(l=0, r=0, t=0, b=0),
-    showlegend=False,  # hide trace legend (plant species names) — it eats map width
-)
-fig.update_coloraxes(showscale=False)  # hide vertical colorbar — gradient above slider is the legend
-
-
-# ── Render map ────────────────────────────────────────────────────────────────
-map_event = st.plotly_chart(
-    fig,
-    use_container_width=True,
-    config={"scrollZoom": True},
-    on_select="rerun",
-    key="field_map_v2",
-)
-st.caption("💡 Tap any grid point to load its coordinates. The 🔵 star = selected candidate.")
-
-# ── Extract click from event — NO extra st.rerun() so zoom is preserved ────────
-# on_select="rerun" already does one rerun; a second rerun resets the map viewport.
-# Plant pins will reflect the PREVIOUS click (one-tap lag), which is acceptable.
-clicked_coords = None
-if map_event and hasattr(map_event, "selection"):
-    _sel = map_event.selection if isinstance(map_event.selection, dict) else {}
-    _pts = _sel.get("points", [])
-    if _pts:
-        _pt = _pts[0]
-        _curve = _pt.get("curveNumber", 0)
-        _lat = _pt.get("lat") or _pt.get("y")
-        _lon = _pt.get("lon") or _pt.get("x")
+        # Map
+        color_col = "CombinedScore"
+        color_title = "Combined Suitability"
+        color_scale = "Plotly3"
         
-        if _lat is not None and _lon is not None:
-            # Always populate the coordinate copier with the exact point clicked (grid or plant)
-            clicked_coords = f"{float(_lat):.6f}, {float(_lon):.6f}"
-            
-            # ONLY update the map's active center if they clicked a grid point (curve 0)
-            # This prevents Plotly from regenerating traces and unclicking the plant pin!
-            if _curve == 0:
-                st.session_state.fa_clicked_lat = float(_lat)
-                st.session_state.fa_clicked_lon = float(_lon)
-    else:
-        # Empty selection = user tapped blank map area = deselect
-        if st.session_state.fa_clicked_lat is not None:
-            st.session_state.fa_clicked_lat = None
-            st.session_state.fa_clicked_lon = None
+        _max_score = float(scores["CombinedScore"].max()) if not scores["CombinedScore"].empty and not pd.isna(scores["CombinedScore"].max()) else 1.0
+        range_color = [0.0, _max_score if _max_score > 0 else 1.0]
 
-st.markdown("---")
+        map_df = scores.copy()
+        # Clip very small values so zero-match points still render (tiny dot)
+        map_df["_size"] = (map_df[color_col].fillna(0) * 15).clip(lower=1.5)
+        map_df["MatchRate_pct"] = (map_df["MatchRate"] * 100).round(1)
 
-# ══ COORDINATE COPIER ══════════════════════════════════════════════════════════
-display_coords = clicked_coords if clicked_coords else _pinned_coords
-display_label  = "🎯 Tapped!" if clicked_coords else f"📌 Candidate #{st.session_state.fa_pin_idx + 1}"
+        # ── Score range filter ─────────────────────────────────────────────
+        _score_min = float(map_df["CombinedScore"].min()) if "CombinedScore" in map_df.columns else 0.0
+        _score_max = float(map_df["CombinedScore"].max()) if "CombinedScore" in map_df.columns else 1.0
+        _score_max = _score_max if _score_max > _score_min else _score_min + 0.001
 
-st.success(display_label)
-st.code(display_coords, language="text")
-
-_gmaps = f"https://www.google.com/maps/search/?api=1&query={display_coords.replace(' ', '')}"
-st.markdown(f"[🔗 Open in Google Maps]({_gmaps})")
-
-# Clear button — visible whenever a point is stored (not just when actively clicked)
-_has_stored = st.session_state.fa_clicked_lat is not None
-if _has_stored and st.button("✖ Clear tap selection", use_container_width=True):
-    st.session_state.fa_clicked_lat = None
-    st.session_state.fa_clicked_lon = None
-    st.rerun()
-
-# ── Nearby plant summary (Park-Centric) ─────────────────────────────────────────
-if st.session_state.plant_obs_dict:
-    # 1. Collect all nearby plant observations within 3.0 miles of selected coordinate
-    _nearby_plants = []
-    for _sp, _obs_list in st.session_state.plant_obs_dict.items():
-        for _o in _obs_list:
-            _dist = haversine_distance(_active_lat, _active_lon, _o["lat"], _o["lon"])
-            if _dist <= 3.0:
-                _o_copy = _o.copy()
-                _o_copy["species"] = _sp
-                _o_copy["dist_to_center"] = _dist
-                _nearby_plants.append(_o_copy)
-                
-    _parks = fetch_parks_osm(_active_lat, _active_lon)
-    if _nearby_plants or _parks:
-        st.markdown("**🌳 Nearby Parks & Plant Observations:**")
-        
-        # Group plants by closest park if within 0.2 miles
-        _park_plants = {p["osm_id"]: [] for p in _parks}
-        _other_plants = []
-        
-        for _plant in _nearby_plants:
-            _closest_park = None
-            _min_dist = float("inf")
-            for _p in _parks:
-                _p_dist = haversine_distance(_plant["lat"], _plant["lon"], _p["lat"], _p["lon"])
-                if _p_dist < _min_dist:
-                    _min_dist = _p_dist
-                    _closest_park = _p
-                    
-            if _closest_park is not None and _min_dist <= 0.2:
-                _park_plants[_closest_park["osm_id"]].append(_plant)
-            else:
-                _other_plants.append(_plant)
-                
-        # Sort parks: count of plants descending, then distance ascending
-        _parks_sorted = []
-        for _p in _parks:
-            _p_plants = _park_plants[_p["osm_id"]]
-            _dist_to_center = haversine_distance(_active_lat, _active_lon, _p["lat"], _p["lon"])
-            _parks_sorted.append({
-                **_p,
-                "dist_to_center": _dist_to_center,
-                "plants_count": len(_p_plants),
-                "plants": _p_plants
-            })
-        _parks_sorted.sort(key=lambda x: (-x["plants_count"], x["dist_to_center"]))
-        
-        # Render park expanders
-        for _p in _parks_sorted:
-            _label = f"🌳 {_p['name']} ({_p['plants_count']})"
-            with st.expander(_label):
-                st.markdown(f"**Distance from selected center:** {_p['dist_to_center']:.2f} miles")
-                st.markdown(f"**OSM Type/ID:** `{_p['type']}/{_p['osm_id']}`")
-                _gmap_park = f"https://www.google.com/maps/search/?api=1&query={_p['lat']:.6f},{_p['lon']:.6f}"
-                st.markdown(f"[🔗 Open Park in Google Maps]({_gmap_park})")
-                st.markdown("---")
-                
-                if _p["plants"]:
-                    # Sort plants inside park by distance to park center
-                    _p["plants"].sort(key=lambda x: haversine_distance(_p["lat"], _p["lon"], x["lat"], x["lon"]))
-                    for _plant in _p["plants"]:
-                        _gmap_plant = f"https://www.google.com/maps/search/?api=1&query={_plant['lat']:.6f},{_plant['lon']:.6f}"
-                        _dist_to_park = haversine_distance(_p["lat"], _p["lon"], _plant["lat"], _plant["lon"])
-                        st.markdown(
-                            f"- **{_plant['species']}**: [{_plant['lat']:.5f}, {_plant['lon']:.5f}]({_gmap_plant}) "
-                            f"({_dist_to_park:.2f} mi from park center) — Observer: @{_plant.get('user', 'unknown')}, Date: {_plant.get('observed_on', 'unknown')}"
-                        )
-                else:
-                    st.write("No nearby plant observations recorded in this park.")
-                    
-        # Render fallback expander for plants not inside any park
-        if _other_plants:
-            _other_plants.sort(key=lambda x: x["dist_to_center"])
-            with st.expander(f"🌿 Other ({len(_other_plants)})"):
-                st.markdown("*Not within 0.2 mi of a mapped park.*")
-                st.markdown("---")
-                for _plant in _other_plants:
-                    _gmap_plant = f"https://www.google.com/maps/search/?api=1&query={_plant['lat']:.6f},{_plant['lon']:.6f}"
-                    st.markdown(
-                        f"- **{_plant['species']}**: [{_plant['lat']:.5f}, {_plant['lon']:.5f}]({_gmap_plant}) "
-                        f"({_plant['dist_to_center']:.2f} mi away) — Observer: @{_plant.get('user', 'unknown')}, Date: {_plant.get('observed_on', 'unknown')}"
-                    )
-
-st.markdown("---")
-
-# ══ TOP CANDIDATES TABLE (below coords — secondary on mobile) ══════════════════
-st.subheader("Top 20 Candidate Locations")
-show_cols = ["Lat", "Lon"]
-if "Elevation_m" in scores.columns:
-    show_cols += ["Elevation_m"]
-show_cols += ["MatchRate"]
-if "CombinedScore" in scores.columns:
-    show_cols += ["CombinedScore"]
-
-top20 = scores.head(20)[show_cols].copy()
-top20.insert(0, "Rank", range(1, len(top20) + 1))
-top20["Google Maps"] = top20.apply(
-    lambda r: f"https://www.google.com/maps/search/?api=1&query={float(r['Lat']):.6f},{float(r['Lon']):.6f}",
-    axis=1,
-)
-top20["MatchRate"] = top20["MatchRate"].map("{:.1%}".format)
-if "Elevation_m" in top20.columns:
-    top20["Elevation_m"] = top20["Elevation_m"].map("{:.0f} m".format)
-if "CombinedScore" in top20.columns:
-    top20["CombinedScore"] = top20["CombinedScore"].map("{:.3f}".format)
-st.dataframe(
-    top20,
-    use_container_width=True,
-    hide_index=True,
-    column_config={
-        "Google Maps": st.column_config.LinkColumn(
-            "Google Maps",
-            display_text="🔗 Open",
+        _filter_range = st.slider(
+            "Filter by Combined Score",
+            min_value=round(_score_min, 3),
+            max_value=round(_score_max, 3),
+            value=(round(_score_min, 3), round(_score_max, 3)),
+            step=round((_score_max - _score_min) / 200, 4) or 0.001,
+            help="Hide grid points outside this score range. Drag either end to focus the map.",
+            key="score_range_filter",
         )
-    },
-)
+        map_df = map_df[
+            (map_df["CombinedScore"] >= _filter_range[0]) &
+            (map_df["CombinedScore"] <= _filter_range[1])
+        ]
+        if map_df.empty:
+            st.warning("No points match the current score filter — try widening the range.")
+            st.stop()
 
-st.markdown("---")
+        # ── Candidate picker (placed above map so star renders on next rerun) ───
+        if "main_pin_idx" not in st.session_state:
+            st.session_state.main_pin_idx = 0
 
-# ══ CANDIDATE HIGHLIGHT (below map so they don't push map down) ═══════════════
-with st.expander("📌 Highlight Candidate", expanded=False):
-    st.caption("This updates the map highlight on the next interaction without zooming out.")
+        _main_pin_opts = [
+            f"#{i+1}  {row['Lat']:.5f}, {row['Lon']:.5f}  (score {row.get('CombinedScore', row.get('MatchRate', 0)):.3f})"
+            for i, row in scores.head(20).iterrows()
+        ]
+        _main_pin_sel = st.selectbox(
+            "📌 Highlight a top candidate on the map",
+            options=_main_pin_opts,
+            index=min(st.session_state.main_pin_idx, len(_main_pin_opts) - 1),
+            key="main_pin_select",
+            help="Places a cyan star on the map at the selected candidate location.",
+        )
+        _main_pin_new_idx = _main_pin_opts.index(_main_pin_sel)
+        if _main_pin_new_idx != st.session_state.main_pin_idx:
+            st.session_state.main_pin_idx = _main_pin_new_idx
+            st.rerun()
+        _main_pinned_row = scores.iloc[st.session_state.main_pin_idx]
+        _main_pin_lat   = float(_main_pinned_row["Lat"])
+        _main_pin_lon   = float(_main_pinned_row["Lon"])
 
-    # Candidate picker
-    _pin_opts = [
-        f"#{i+1}  {row['Lat']:.5f}, {row['Lon']:.5f}  (score {row.get('CombinedScore', row.get('MatchRate', 0)):.3f})"
-        for i, row in scores.head(20).iterrows()
-    ]
-    _pin_sel = st.selectbox(
-        "📌 Highlight candidate on map",
-        options=_pin_opts,
-        index=min(st.session_state.fa_pin_idx, len(_pin_opts) - 1),
-        key="fa_pin_select",
-        help="Places a ⭐ marker on the map at this candidate's location.",
-    )
-    _pin_new_idx = _pin_opts.index(_pin_sel)
-    if _pin_new_idx != st.session_state.fa_pin_idx:
-        st.session_state.fa_pin_idx = _pin_new_idx
-        st.rerun()
+        # Dynamic map center and zoom level based on user's active grid settings
+        map_center = {
+            "lat": st.session_state.grid_center_lat,
+            "lon": st.session_state.grid_center_lon
+        }
+        # Clamped auto-zoom calculation: 13.5 - log2(radius_mi)
+        auto_zoom = float(np.clip(13.5 - np.log2(st.session_state.grid_radius_mi), 3.0, 15.0))
+
+        custom_data_cols = ["Lat", "Lon", "Elevation_m", "IsValley",
+                            "MatchRate_pct", "Confidence_Z", "Matches", "ObsCount"]
+        if "PlantScore" in map_df.columns:
+            custom_data_cols += ["PlantScore"]       # index 8
+        else:
+            map_df["PlantScore"] = 1.0
+            custom_data_cols += ["PlantScore"]
+
+        if "CloudScore" in map_df.columns:
+            custom_data_cols += ["CloudScore"]       # index 9
+        else:
+            map_df["CloudScore"] = 1.0
+            custom_data_cols += ["CloudScore"]
+
+        if "ContrastScore" in map_df.columns:
+            custom_data_cols += ["ContrastScore"]    # index 10
+        else:
+            map_df["ContrastScore"] = 1.0
+            custom_data_cols += ["ContrastScore"]
+
+        if "CombinedScore" in map_df.columns:
+            custom_data_cols += ["CombinedScore"]    # index 11
+        else:
+            map_df["CombinedScore"] = map_df["MatchRate"]
+            custom_data_cols += ["CombinedScore"]
+
+        fig = px.scatter_mapbox(
+            map_df,
+            lat="Lat",
+            lon="Lon",
+            color=color_col,
+            size="_size",
+            size_max=18,
+            color_continuous_scale=color_scale,
+            range_color=range_color,
+            opacity=st.session_state.map_opacity / 100.0,
+            custom_data=custom_data_cols,
+            mapbox_style="carto-darkmatter",
+            zoom=auto_zoom,
+            center=map_center,
+            height=570,
+        )
+
+        # Generate hover template
+        hover_template_str = (
+            "<b>Match Rate: %{customdata[4]:.1f}%</b><br>"
+            "Confidence: %{customdata[5]:+.2f}sigma<br>"
+            "Matches: %{customdata[6]} / %{customdata[7]} obs<br>"
+            "Lat: %{customdata[0]:.4f}  Lon: %{customdata[1]:.4f}<br>"
+            "Elevation: %{customdata[2]:.0f} m  Valley: %{customdata[3]}"
+        )
+        hover_template_str += (
+            "<br>Plant Proximity Score: %{customdata[8]:.2f}"
+            "<br>Cloud Differential: %{customdata[9]:.2f}"
+            "<br>High-Contrast Cloud Score: %{customdata[10]:.2f}"
+            "<br>Combined Suitability: %{customdata[11]:.2f}"
+        )
+        hover_template_str += "<extra></extra>"
+
+        fig.update_traces(
+            hovertemplate=hover_template_str
+        )
+
+        # Map Overlays
+        mapbox_layers = []
+        if "map_overlays" in st.session_state:
+            for overlay in st.session_state.map_overlays:
+                _ov_dir = os.path.join(get_hunt_dir(), "overlays")
+                _resolved_path = os.path.join(_ov_dir, overlay["name"])
+                
+                if overlay.get("visible", True) and os.path.exists(_resolved_path):
+                    with open(_resolved_path, "rb") as f:
+                        b64 = base64.b64encode(f.read()).decode("utf-8")
+                    
+                    ext = os.path.splitext(_resolved_path)[1].lower()
+                    mime = "image/png" if ext == ".png" else "image/jpeg"
+                    b64_url = f"data:{mime};base64,{b64}"
+                    
+                    corners = get_rotated_corners(
+                        center_lat=float(overlay["lat"]),
+                        center_lon=float(overlay["lon"]),
+                        width_km=float(overlay["width"]),
+                        height_km=float(overlay["height"]),
+                        rotation_deg=float(overlay["rotation"]),
+                        anchor_x=float(overlay.get("anchor_x", 0.5)),
+                        anchor_y=float(overlay.get("anchor_y", 0.5))
+                    )
+                    
+                    mapbox_layers.append({
+                        "sourcetype": "image",
+                        "source": b64_url,
+                        "coordinates": corners,
+                        "opacity": float(overlay["opacity"]),
+                        "below": "traces"
+                    })
+
+        if mapbox_layers:
+            fig.update_layout(mapbox_layers=mapbox_layers)
+
+        # Extract coordinates clicked/selected on the map
+        clicked_lat = None
+        clicked_lon = None
+        clicked_coords = None
+        if "scoring_map" in st.session_state and st.session_state.scoring_map:
+            points = st.session_state.scoring_map.get("selection", {}).get("points", [])
+            if points:
+                pt = points[0]
+                lat = pt.get("lat") or pt.get("y")
+                lon = pt.get("lon") or pt.get("x")
+                if lat is not None and lon is not None:
+                    clicked_lat = float(lat)
+                    clicked_lon = float(lon)
+                    clicked_coords = f"{clicked_lat:.6f}, {clicked_lon:.6f}"
+
+        # OSM Parks trace
+        active_lat = clicked_lat if clicked_lat is not None else _main_pin_lat
+        active_lon = clicked_lon if clicked_lon is not None else _main_pin_lon
+        
+        _parks = fetch_parks_osm(active_lat, active_lon)
+        if _parks:
+            _park_df = pd.DataFrame(_parks)
+            
+            # Calculate observations within 0.2 miles of each park
+            _park_counts = []
+            for _p in _parks:
+                _count = 0
+                if st.session_state.plant_obs_dict:
+                    for _species, _obs_list in st.session_state.plant_obs_dict.items():
+                        for _o in _obs_list:
+                            if scorer.haversine_distance(_p["lat"], _p["lon"], _o["lat"], _o["lon"]) <= 0.2:
+                                _count += 1
+                _park_counts.append(_count)
+            _park_df["plants_count"] = _park_counts
+            
+            _park_cdata = np.column_stack([
+                _park_df["name"].astype(str).values,
+                _park_df["plants_count"].astype(str).values,
+                _park_df["lat"].map("{:.5f}".format).values,
+                _park_df["lon"].map("{:.5f}".format).values,
+            ])
+            
+            fig.add_trace(go.Scattermapbox(
+                lat=_park_df["lat"],
+                lon=_park_df["lon"],
+                mode="markers",
+                marker=dict(size=12, color="#1a7f37", symbol="circle"),
+                customdata=_park_cdata,
+                hovertemplate=(
+                    "<b>🌳 %{customdata[0]}</b><br>"
+                    "Plant Observations: %{customdata[1]}<br>"
+                    "Location: %{customdata[2]}, %{customdata[3]}"
+                    "<extra></extra>"
+                ),
+                name="Parks",
+            ))
+
+        # Candidate star marker from the dropdown above
+        fig.add_trace(go.Scattermapbox(
+            lat=[_main_pin_lat],
+            lon=[_main_pin_lon],
+            mode="markers",
+            marker=dict(size=18, color="#00e5ff", symbol="star"),
+            hovertext=f"📌 Selected: {_main_pin_lat:.6f}, {_main_pin_lon:.6f}",
+            hoverinfo="text",
+            name="Selected",
+            showlegend=False,
+        ))
+
+        # Custom center marker
+        fig.add_trace(go.Scattermapbox(
+            lat=[st.session_state.grid_center_lat],
+            lon=[st.session_state.grid_center_lon],
+            mode="markers+text",
+            marker=dict(size=14, color="white", symbol="star"),
+            text=["Grid Center"],
+            textposition="top right",
+            textfont=dict(color="white", size=11),
+            hoverinfo="text",
+            hovertext=f"Grid Center ({st.session_state.grid_center_lat}, {st.session_state.grid_center_lon})",
+            name="Center",
+            showlegend=False,
+        ))
+
+        # Preserve manual zoom/pan state unless grid parameters change
+        grid_rev_key = f"{st.session_state.grid_center_lat}_{st.session_state.grid_center_lon}_{st.session_state.grid_radius_mi}"
+
+        _cbar_title = color_title   # "Combined Suitability" or "Match Rate"
+        _cbar_fmt   = ".0%" if color_col == "MatchRate" else ".2f"
+        fig.update_layout(
+            uirevision=grid_rev_key,
+            paper_bgcolor="#0d1117",
+            plot_bgcolor="#0d1117",
+            margin=dict(l=0, r=0, t=0, b=0),
+            coloraxis_colorbar=dict(
+                title=dict(
+                    text=_cbar_title,
+                    font=dict(color="#e6edf3"),
+                ),
+                tickformat=_cbar_fmt,
+                len=0.55,
+                bgcolor="#161b22",
+                bordercolor="#30363d",
+                borderwidth=1,
+                tickfont=dict(color="#e6edf3"),
+            ),
+        )
+
+        st.caption("💡 **Tip**: Click any point on the map below to instantly load its coordinates into the **Coordinate Copier**!")
+
+        # Enable interactive click and selection directly on the map
+        st.plotly_chart(
+            fig,
+            use_container_width=True,
+            config={"scrollZoom": True},
+            on_select="rerun",
+            key="scoring_map"
+        )
+
+        col_tbl, col_cpy = st.columns([2.7, 1.3])
+
+        # coordinates were already extracted above
+
+        with col_tbl:
+            st.subheader("Top 10 Candidate Locations")
+            tbl_cols = ["Lat", "Lon", "Elevation_m", "IsValley", "MatchRate", "Confidence_Z", "Matches", "ObsCount"]
+            if "PlantScore" in scores.columns:
+                tbl_cols += ["PlantScore"]
+            if "CloudScore" in scores.columns:
+                tbl_cols += ["CloudScore"]
+            if "ContrastScore" in scores.columns:
+                tbl_cols += ["ContrastScore"]
+            if "CombinedScore" in scores.columns:
+                tbl_cols += ["CombinedScore"]
+
+            top10 = scores.head(10)[tbl_cols].copy()
+            top10.insert(0, "Rank", range(1, len(top10) + 1))
+
+            # Build full URLs so LinkColumn renders them as clickable
+            top10["Google Maps Coordinates"] = top10.apply(
+                lambda r: f"https://www.google.com/maps/search/?api=1&query={float(r['Lat']):.6f},{float(r['Lon']):.6f}",
+                axis=1,
+            )
+
+            # Format numeric columns before renaming
+            top10["MatchRate"]    = top10["MatchRate"].map("{:.1%}".format)
+            top10["Confidence_Z"] = top10["Confidence_Z"].map("{:+.2f}sigma".format)
+            top10["Elevation_m"]  = top10["Elevation_m"].map("{:.0f} m".format)
+            if "PlantScore" in top10.columns:
+                top10["PlantScore"] = top10["PlantScore"].map("{:.2f}".format)
+            if "CloudScore" in top10.columns:
+                top10["CloudScore"] = top10["CloudScore"].map("{:.2f}".format)
+            if "ContrastScore" in top10.columns:
+                top10["ContrastScore"] = top10["ContrastScore"].map("{:.2f}".format)
+            if "CombinedScore" in top10.columns:
+                top10["CombinedScore"] = top10["CombinedScore"].map("{:.2f}".format)
+
+            # Rename using a dict — safe against column count mismatches
+            top10 = top10.rename(columns={
+                "Elevation_m":   "Elevation",
+                "IsValley":      "Valley?",
+                "MatchRate":     "Match Rate",
+                "Confidence_Z":  "Confidence",
+                "Matches":       "Matches",
+                "ObsCount":      "Obs Used",
+                "PlantScore":    "Plant Score",
+                "CloudScore":    "Cloud Diff",
+                "ContrastScore": "Contrast",
+                "CombinedScore": "Combined Score",
+            })
+            st.dataframe(
+                top10,
+                use_container_width=True,
+                hide_index=True,
+                column_config={
+                    "Google Maps Coordinates": st.column_config.LinkColumn(
+                        "Google Maps",
+                        display_text="🔗 Open",
+                    )
+                },
+            )
+
+        with col_cpy:
+            st.subheader("📍 Coordinate Copier")
+            
+            if clicked_coords:
+                st.success("🎯 **Map Point Selected!**")
+                st.markdown("**Google Maps & Sheets Coordinates**:")
+                st.code(clicked_coords, language="text")
+                
+                # Direct search link for google maps
+                gmaps_url = f"https://www.google.com/maps/search/?api=1&query={clicked_coords.replace(' ', '')}"
+                st.markdown(f"[🔗 View on Google Maps]({gmaps_url})")
+                
+                if st.button("Reset Selection", use_container_width=True, help="Clear map selection and go back to dropdown"):
+                    st.session_state.scoring_map = None
+                    st.rerun()
+            else:
+                st.caption("Click any point on the map, or select a location from the dropdown below to copy coordinates:")
+                # Dropdown of top 20 candidates
+                if "CombinedScore" in scores.columns:
+                    copy_opts = [
+                        f"Rank #{i+1}: {row['Lat']:.6f}, {row['Lon']:.6f} (Suitability: {row['CombinedScore']:.2f})"
+                        for i, row in scores.head(20).iterrows()
+                    ]
+                else:
+                    copy_opts = [
+                        f"Rank #{i+1}: {row['Lat']:.6f}, {row['Lon']:.6f} ({row['MatchRate']:.1%} match)"
+                        for i, row in scores.head(20).iterrows()
+                    ]
+
+                selected_opt = st.selectbox(
+                    "Select location to copy",
+                    copy_opts,
+                    index=st.session_state.main_pin_idx,
+                    label_visibility="visible",
+                    help="Select a location to easily copy its coordinates for pasting into Google Maps, Google Sheets, etc.",
+                    key="main_copy_sel",
+                )
+                if selected_opt:
+                    # Extract the lat, lon
+                    coords_str = selected_opt.split(": ")[1].split(" (")[0]
+                    
+                    st.markdown("**Copy/Paste Coordinates**:")
+                    st.code(coords_str, language="text")
+                    st.caption("💡 Hover and click the **Copy icon** in the top-right of the box above to copy!")
+                    
+                    # Direct search link for google maps
+                    gmaps_url = f"https://www.google.com/maps/search/?api=1&query={coords_str.replace(' ', '')}"
+                    st.markdown(f"[🔗 View on Google Maps]({gmaps_url})")
+
+        # ── Nearby plant summary (Park-Centric) ─────────────────────────────────────────
+        st.markdown("---")
+        if st.session_state.plant_obs_dict:
+            # 1. Collect all nearby plant observations within 3.0 miles of selected coordinate
+            _nearby_plants = []
+            for _sp, _obs_list in st.session_state.plant_obs_dict.items():
+                for _o in _obs_list:
+                    _dist = scorer.haversine_distance(active_lat, active_lon, _o["lat"], _o["lon"])
+                    if _dist <= 3.0:
+                        _o_copy = _o.copy()
+                        _o_copy["species"] = _sp
+                        _o_copy["dist_to_center"] = _dist
+                        _nearby_plants.append(_o_copy)
+                        
+            if _nearby_plants or _parks:
+                st.markdown("**🌳 Nearby Parks & Plant Observations:**")
+                
+                # Group plants by closest park if within 0.2 miles
+                _park_plants = {p["osm_id"]: [] for p in _parks}
+                _other_plants = []
+                
+                for _plant in _nearby_plants:
+                    _closest_park = None
+                    _min_dist = float("inf")
+                    for _p in _parks:
+                        _p_dist = scorer.haversine_distance(_plant["lat"], _plant["lon"], _p["lat"], _p["lon"])
+                        if _p_dist < _min_dist:
+                            _min_dist = _p_dist
+                            _closest_park = _p
+                            
+                    if _closest_park is not None and _min_dist <= 0.2:
+                        _park_plants[_closest_park["osm_id"]].append(_plant)
+                    else:
+                        _other_plants.append(_plant)
+                        
+                # Sort parks: count of plants descending, then distance ascending
+                _parks_sorted = []
+                for _p in _parks:
+                    _p_plants = _park_plants[_p["osm_id"]]
+                    _dist_to_center = scorer.haversine_distance(active_lat, active_lon, _p["lat"], _p["lon"])
+                    _parks_sorted.append({
+                        **_p,
+                        "dist_to_center": _dist_to_center,
+                        "plants_count": len(_p_plants),
+                        "plants": _p_plants
+                    })
+                _parks_sorted.sort(key=lambda x: (-x["plants_count"], x["dist_to_center"]))
+                
+                # Render park expanders
+                for _p in _parks_sorted:
+                    _label = f"🌳 {_p['name']} ({_p['plants_count']})"
+                    with st.expander(_label):
+                        st.markdown(f"**Distance from selected center:** {_p['dist_to_center']:.2f} miles")
+                        st.markdown(f"**OSM Type/ID:** `{_p['type']}/{_p['osm_id']}`")
+                        _gmap_park = f"https://www.google.com/maps/search/?api=1&query={_p['lat']:.6f},{_p['lon']:.6f}"
+                        st.markdown(f"[🔗 Open Park in Google Maps]({_gmap_park})")
+                        st.markdown("---")
+                        
+                        if _p["plants"]:
+                            # Sort plants inside park by distance to park center
+                            _p["plants"].sort(key=lambda x: scorer.haversine_distance(_p["lat"], _p["lon"], x["lat"], x["lon"]))
+                            for _plant in _p["plants"]:
+                                _gmap_plant = f"https://www.google.com/maps/search/?api=1&query={_plant['lat']:.6f},{_plant['lon']:.6f}"
+                                _dist_to_park = scorer.haversine_distance(_p["lat"], _p["lon"], _plant["lat"], _plant["lon"])
+                                st.markdown(
+                                    f"- **{_plant['species']}**: [{_plant['lat']:.5f}, {_plant['lon']:.5f}]({_gmap_plant}) "
+                                    f"({_dist_to_park:.2f} mi from park center) — Observer: @{_plant.get('user', 'unknown')}, Date: {_plant.get('observed_on', 'unknown')}"
+                                )
+                        else:
+                            st.write("No nearby plant observations recorded in this park.")
+                            
+                # Render fallback expander for plants not inside any park
+                if _other_plants:
+                    _other_plants.sort(key=lambda x: x["dist_to_center"])
+                    with st.expander(f"🌿 Other ({len(_other_plants)})"):
+                        st.markdown("*These observations are within 3 miles of the selected coordinates, but not within 0.2 miles of a known park.*")
+                        st.markdown("---")
+                        for _plant in _other_plants:
+                            _gmap_plant = f"https://www.google.com/maps/search/?api=1&query={_plant['lat']:.6f},{_plant['lon']:.6f}"
+                            st.markdown(
+                                f"- **{_plant['species']}**: [{_plant['lat']:.5f}, {_plant['lon']:.5f}]({_gmap_plant}) "
+                                f"({_plant['dist_to_center']:.2f} mi away) — Observer: @{_plant.get('user', 'unknown')}, Date: {_plant.get('observed_on', 'unknown')}"
+                            )
+
+
