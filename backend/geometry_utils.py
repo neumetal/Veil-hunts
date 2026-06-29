@@ -62,3 +62,52 @@ def get_rotated_corners(
         rotated_coords.append([center_lon + rx_deg, center_lat + ry_deg])
 
     return rotated_coords
+
+import pandas as pd
+try:
+    from shapely.geometry import Point, LineString, MultiLineString
+    from shapely.ops import nearest_points
+    import pyproj
+    geod = pyproj.Geod(ellps="WGS84")
+    _SHAPELY_AVAILABLE = True
+except ImportError:
+    _SHAPELY_AVAILABLE = False
+
+def distance_to_line_meters(lat: float, lon: float, line_coords: list) -> float:
+    """
+    Calculate the shortest distance in meters from a point to a line segment.
+    line_coords is a list of (lat, lon) tuples.
+    """
+    if not _SHAPELY_AVAILABLE:
+        return 999999.0
+        
+    pt = Point(lon, lat)
+    line = LineString([(c[1], c[0]) for c in line_coords])
+    
+    _, nearest_pt = nearest_points(pt, line)
+    _, _, dist = geod.inv(lon, lat, nearest_pt.x, nearest_pt.y)
+    return dist
+
+def filter_points_by_lines(df: pd.DataFrame, features_lines: list, max_distance_meters: float = 91.44) -> pd.Series:
+    """
+    Given a dataframe of scores and a list of line features (trails/streams),
+    return a boolean mask of which points are within max_distance_meters of ANY line.
+    Defaults to 91.44 meters (300 feet).
+    """
+    if not _SHAPELY_AVAILABLE or not features_lines:
+        return pd.Series(False, index=df.index)
+        
+    all_lines = []
+    for f in features_lines:
+        all_lines.append(LineString([(c[1], c[0]) for c in f["coords"]]))
+        
+    multi_line = MultiLineString(all_lines)
+    
+    mask = []
+    for _, row in df.iterrows():
+        pt = Point(row["Lon"], row["Lat"])
+        _, nearest_pt = nearest_points(pt, multi_line)
+        _, _, dist = geod.inv(row["Lon"], row["Lat"], nearest_pt.x, nearest_pt.y)
+        mask.append(dist <= max_distance_meters)
+        
+    return pd.Series(mask, index=df.index)

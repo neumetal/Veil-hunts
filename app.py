@@ -19,6 +19,9 @@ import pandas as pd
 import plotly.express as px
 import plotly.graph_objects as go
 import streamlit as st
+import folium
+import branca.colormap as cm
+from streamlit_folium import st_folium
 from datetime import date, time, datetime
 
 # ── Backend path ─────────────────────────────────────────────────────────────
@@ -221,7 +224,7 @@ if "observations" not in st.session_state:
 if "scores" not in st.session_state:
     st.session_state.scores = None
 if "fog_threshold" not in st.session_state:
-    st.session_state.fog_threshold = 5
+    st.session_state.fog_threshold = 10
 if "selected_csv" not in st.session_state:
     _mp = get_master_parquet()
     st.session_state.selected_csv = _mp if os.path.exists(_mp) else None
@@ -243,7 +246,11 @@ if "plant_obs_dict" not in st.session_state:
 if "plant_influence_radius" not in st.session_state:
     st.session_state.plant_influence_radius = 3.0
 if "plant_match_mode" not in st.session_state:
-    st.session_state.plant_match_mode = "Any"
+    st.session_state.plant_match_mode = "All"
+if "osm_features" not in st.session_state:
+    st.session_state.osm_features = {"polygons": [], "lines": []}
+if "map_overlays" not in st.session_state:
+    st.session_state.map_overlays = _saved_settings.get("map_overlays", [])
 if "show_plant_pins" not in st.session_state:
     st.session_state.show_plant_pins = True
 if "map_color_by" not in st.session_state:
@@ -496,6 +503,7 @@ with st.sidebar:
     threshold_choice = st.radio(
         "threshold",
         ["Moderate  (Score >= 5)", "Confirmed  (Score >= 10)"],
+        index=0 if st.session_state.fog_threshold == 5 else 1,
         label_visibility="collapsed",
     )
     new_threshold = 5 if "5" in threshold_choice else 10
@@ -515,8 +523,27 @@ with st.sidebar:
     c2.metric("Fog",   n_fog)
     c3.metric("Clear", n_clear)
 
-    st.markdown("---")
     st.markdown('<p class="section-header">Analysis Settings</p>', unsafe_allow_html=True)
+
+    with st.expander("🌍 Global Map Layers (OSM)", expanded=False):
+        st.caption("Fetch parks, streams, and trails for the active grid. Best used on smaller grids (< 10 miles).")
+        if st.button("Fetch OSM Data", use_container_width=True):
+            with st.spinner("Querying Overpass API for features..."):
+                import osm_client
+                pts = geometry_utils.get_rotated_corners(
+                    st.session_state.grid_center_lat,
+                    st.session_state.grid_center_lon,
+                    st.session_state.grid_radius_mi * 1.60934 * 2,
+                    st.session_state.grid_radius_mi * 1.60934 * 2,
+                    0
+                )
+                lats = [p[1] for p in pts]
+                lons = [p[0] for p in pts]
+                st.session_state.osm_features = osm_client.fetch_osm_features(
+                    min(lats), min(lons), max(lats), max(lons)
+                )
+                st.rerun()
+                
     with st.expander("🗺️ Grid Settings", expanded=False):
         new_lat = st.number_input("Center Latitude", value=st.session_state.grid_center_lat, format="%.6f", step=0.1)
         new_lon = st.number_input("Center Longitude", value=st.session_state.grid_center_lon, format="%.6f", step=0.1)
@@ -552,6 +579,7 @@ with st.sidebar:
         invalidate_scores()
         st.rerun()
 
+    st.markdown("---")
 
     with st.expander("🌿 iNaturalist Plant Settings", expanded=False):
         # 1. Search and Add Plant
@@ -801,7 +829,7 @@ with st.sidebar:
                         save_settings(st.session_state.settings_cache)
                         st.rerun()
                     
-                n_w = st.slider("Scale (Width km)", 0.1, 500.0, float(overlay["width"]), step=0.5, key=f"ov_scale_{idx}")
+                n_w = st.slider("Scale (Width km)", 0.1, 1000.0, float(overlay["width"]), step=0.5, key=f"ov_scale_{idx}")
                 n_h = n_w / aspect_ratio
                     
                 n_rot = st.slider("Rotation (°)", 0.0, 360.0, value=float(overlay["rotation"]), step=1.0, key=f"ov_rot_{idx}")
@@ -1274,11 +1302,17 @@ with tab3:
             _score_max = float(map_df["CombinedScore"].max()) if "CombinedScore" in map_df.columns else 1.0
             _score_max = _score_max if _score_max > _score_min else _score_min + 0.001
 
+            if "score_range_filter" not in st.session_state or st.session_state.score_range_filter[1] < _score_min:
+                # Default to top 10%
+                st.session_state.score_range_filter = (
+                    round(_score_max - ((_score_max - _score_min) * 0.1), 3),
+                    round(_score_max, 3)
+                )
+
             _filter_range = st.slider(
                 "Filter by Combined Score",
                 min_value=round(_score_min, 3),
                 max_value=round(_score_max, 3),
-                value=(round(_score_min, 3), round(_score_max, 3)),
                 step=round((_score_max - _score_min) / 200, 4) or 0.001,
                 help="Hide grid points outside this score range. Drag either end to focus the map.",
                 key="score_range_filter",
@@ -1348,195 +1382,280 @@ with tab3:
                 map_df["CombinedScore"] = map_df["MatchRate"]
                 custom_data_cols += ["CombinedScore"]
 
-            fig = px.scatter_mapbox(
-                map_df,
-                lat="Lat",
-                lon="Lon",
-                color=color_col,
-                size="_size",
-                size_max=18,
-                color_continuous_scale=color_scale,
-                range_color=range_color,
-                opacity=st.session_state.map_opacity / 100.0,
-                custom_data=custom_data_cols,
-                mapbox_style="carto-darkmatter",
-                zoom=auto_zoom,
-                center=map_center,
-                height=570,
-            )
 
-            # Generate hover template
-            hover_template_str = (
-                "<b>Match Rate: %{customdata[4]:.1f}%</b><br>"
-                "Confidence: %{customdata[5]:+.2f}sigma<br>"
-                "Matches: %{customdata[6]} / %{customdata[7]} obs<br>"
-                "Lat: %{customdata[0]:.4f}  Lon: %{customdata[1]:.4f}<br>"
-                "Elevation: %{customdata[2]:.0f} m  Valley: %{customdata[3]}"
+            # Build Folium Map
+            m = folium.Map(
+                location=[map_center["lat"], map_center["lon"]], 
+                zoom_start=auto_zoom, 
+                tiles="cartodbdark_matter",
+                control_scale=True
             )
-            hover_template_str += (
-                "<br>Plant Proximity Score: %{customdata[8]:.2f}"
-                "<br>Cloud Differential: %{customdata[9]:.2f}"
-                "<br>High-Contrast Cloud Score: %{customdata[10]:.2f}"
-                "<br>Combined Suitability: %{customdata[11]:.2f}"
+            
+            # Heatmap points
+            # Ensure the color column is purely numeric
+            cmin, cmax = range_color
+            if cmax <= cmin:
+                cmax = cmin + 0.01
+            cmap = cm.LinearColormap(
+                colors=["#000004", "#51127c", "#b63679", "#fb8861", "#fcffa4"], 
+                vmin=cmin, 
+                vmax=cmax,
+                caption=color_title
             )
-            hover_template_str += "<extra></extra>"
+            m.add_child(cmap)
 
-            fig.update_traces(
-                hovertemplate=hover_template_str
-            )
+            # Draw heatmap points
+            # If dataset is huge, we might need FastMarkerCluster or similar, but CircleMarkers are best for sizes
+            # We'll limit to top 3000 to keep browser fast if necessary, but Streamlit-Folium handles up to 5000 ok.
+            for _, row in map_df.iterrows():
+                val = row.get(color_col, 0)
+                if pd.isna(val):
+                    continue
+                color = cmap(val)
+                
+                # HTML tooltip
+                html = f"<b>Match Rate: {row['MatchRate_pct']:.1f}%</b><br>"
+                html += f"Confidence: {row['Confidence_Z']:+.2f}sigma<br>"
+                html += f"Matches: {row['Matches']} / {row['ObsCount']} obs<br>"
+                html += f"Lat: {row['Lat']:.4f}  Lon: {row['Lon']:.4f}<br>"
+                html += f"Elevation: {row['Elevation_m']:.0f} m  Valley: {row['IsValley']}<br>"
+                if "PlantScore" in map_df.columns:
+                    html += f"Plant Proximity Score: {row['PlantScore']:.2f}<br>"
+                if "CloudScore" in map_df.columns:
+                    html += f"Cloud Differential: {row['CloudScore']:.2f}<br>"
+                if "ContrastScore" in map_df.columns:
+                    html += f"High-Contrast Cloud Score: {row['ContrastScore']:.2f}<br>"
+                if "CombinedScore" in map_df.columns:
+                    html += f"Combined Suitability: {row['CombinedScore']:.2f}<br>"
+                    
+                folium.CircleMarker(
+                    location=[row["Lat"], row["Lon"]],
+                    radius=max(2, row["_size"] / 2),
+                    color=color,
+                    weight=1,
+                    fill=True,
+                    fill_color=color,
+                    fill_opacity=st.session_state.map_opacity / 100.0,
+                    tooltip=folium.Tooltip(html)
+                ).add_to(m)
 
+            # --- Global Map Layers (OSM) ---
+            if "osm_features" in st.session_state:
+                # Polygons (Parks, Forests, Lakes)
+                for poly in st.session_state.osm_features.get("polygons", []):
+                    # coords are (lat, lon)
+                    coords = poly["coords"]
+                    
+                    color = "#228b22"  # green
+                    fill_opacity = 0.3
+                    if "water" in poly["tags"].get("natural", ""):
+                        color = "#1e90ff" # blue
+                        fill_opacity = 0.4
+                        
+                    folium.Polygon(
+                        locations=coords,
+                        color=color,
+                        weight=1,
+                        fill=True,
+                        fill_color=color,
+                        fill_opacity=fill_opacity,
+                        tooltip=poly["name"]
+                    ).add_to(m)
+                    
+                # Lines (Trails, Streams, Power lines)
+                for line in st.session_state.osm_features.get("lines", []):
+                    coords = line["coords"]
+                    
+                    color = "orange"
+                    weight = 2
+                    if "waterway" in line["tags"]:
+                        color = "cyan"
+                        weight = 3
+                    elif "power" in line["tags"]:
+                        color = "yellow"
+                        weight = 1
+                        
+                    folium.PolyLine(
+                        locations=coords,
+                        color=color,
+                        weight=weight,
+                        tooltip=line["name"]
+                    ).add_to(m)
+
+            # --- Global Plant Layers ---
+            if st.session_state.get("show_plant_pins", True):
+                colors = ['red', 'blue', 'green', 'purple', 'orange', 'darkred', 'lightred', 'beige', 'darkblue', 'darkgreen']
+                for p_idx, p in enumerate(st.session_state.selected_plants):
+                    tid = p["id"]
+                    if tid in st.session_state.plant_obs_dict:
+                        obs_list = st.session_state.plant_obs_dict[tid]
+                        if obs_list:
+                            c = colors[p_idx % len(colors)]
+                            for o in obs_list:
+                                folium.Marker(
+                                    location=[o["lat"], o["lon"]],
+                                    tooltip=p["common"],
+                                    icon=folium.Icon(color=c, icon="leaf")
+                                ).add_to(m)
+
+            # Extract coordinates clicked/selected on the map
+            clicked_lat = None
+            clicked_lon = None
+            clicked_coords = None
+            
             # Map Overlays
-            mapbox_layers = []
+            # Note: Folium only supports rectangular bounds [SW, NE].
             if "map_overlays" in st.session_state:
                 for overlay in st.session_state.map_overlays:
                     _ov_dir = os.path.join(get_hunt_dir(), "overlays")
                     _resolved_path = os.path.join(_ov_dir, overlay["name"])
                     
                     if overlay.get("visible", True) and os.path.exists(_resolved_path):
-                        with open(_resolved_path, "rb") as f:
-                            b64 = base64.b64encode(f.read()).decode("utf-8")
+                        ax = overlay.get("anchor_x", 0.5)
+                        ay = overlay.get("anchor_y", 0.5)
+                        lat_span = overlay["height"] / 111.0
+                        lon_span = overlay["width"] / (111.0 * np.cos(np.radians(overlay["lat"])))
                         
-                        ext = os.path.splitext(_resolved_path)[1].lower()
-                        mime = "image/png" if ext == ".png" else "image/jpeg"
-                        b64_url = f"data:{mime};base64,{b64}"
+                        sw = [overlay["lat"] - lat_span * (1.0 - ay), overlay["lon"] - lon_span * ax]
+                        ne = [overlay["lat"] + lat_span * ay, overlay["lon"] + lon_span * (1.0 - ax)]
                         
-                        corners = get_rotated_corners(
-                            center_lat=float(overlay["lat"]),
-                            center_lon=float(overlay["lon"]),
-                            width_km=float(overlay["width"]),
-                            height_km=float(overlay["height"]),
-                            rotation_deg=float(overlay["rotation"]),
-                            anchor_x=float(overlay.get("anchor_x", 0.5)),
-                            anchor_y=float(overlay.get("anchor_y", 0.5))
-                        )
-                        
-                        mapbox_layers.append({
-                            "sourcetype": "image",
-                            "source": b64_url,
-                            "coordinates": corners,
-                            "opacity": float(overlay["opacity"]),
-                            "below": "traces"
-                        })
+                        folium.raster_layers.ImageOverlay(
+                            image=_resolved_path,
+                            bounds=[sw, ne],
+                            opacity=float(overlay["opacity"]),
+                            interactive=True,
+                            cross_origin=False,
+                            zindex=1
+                        ).add_to(m)
 
-            if mapbox_layers:
-                fig.update_layout(mapbox_layers=mapbox_layers)
-
-            # Extract coordinates clicked/selected on the map
-            clicked_lat = None
-            clicked_lon = None
-            clicked_coords = None
             if "scoring_map" in st.session_state and st.session_state.scoring_map:
-                points = st.session_state.scoring_map.get("selection", {}).get("points", [])
-                if points:
-                    pt = points[0]
-                    lat = pt.get("lat") or pt.get("y")
-                    lon = pt.get("lon") or pt.get("x")
-                    if lat is not None and lon is not None:
-                        clicked_lat = float(lat)
-                        clicked_lon = float(lon)
-                        clicked_coords = f"{clicked_lat:.6f}, {clicked_lon:.6f}"
+                last_clicked = st.session_state.scoring_map.get("last_clicked")
+                if last_clicked:
+                    clicked_lat = float(last_clicked["lat"])
+                    clicked_lon = float(last_clicked["lng"])
+                    clicked_coords = f"{clicked_lat:.6f}, {clicked_lon:.6f}"
 
-            # OSM Parks trace
+            # OSM Parks trace dynamically around clicked point
             active_lat = clicked_lat if clicked_lat is not None else _main_pin_lat
             active_lon = clicked_lon if clicked_lon is not None else _main_pin_lon
-            
-            _parks = fetch_parks_osm(active_lat, active_lon)
-            if _parks:
-                _park_df = pd.DataFrame(_parks)
+                    
+            # Dynamic local OSM traces (Trails/Streams and Park Boundaries) for the active point
+            if active_lat is not None and active_lon is not None:
+                r_lat = round(active_lat, 2)
+                r_lon = round(active_lon, 2)
+                _local_features = osm_client.fetch_osm_features(
+                    r_lat - 0.02, r_lon - 0.02, 
+                    r_lat + 0.02, r_lon + 0.02
+                )
                 
-                # Calculate observations within 0.2 miles of each park
-                _park_counts = []
-                for _p in _parks:
+                # Draw local Polygons (Parks/Forests)
+                for poly in _local_features.get("polygons", []):
+                    coords = poly["coords"]
+                    
+                    # Calculate center for haversine plant count
+                    c_lat = sum([c[0] for c in coords]) / len(coords)
+                    c_lon = sum([c[1] for c in coords]) / len(coords)
+                    
                     _count = 0
                     if st.session_state.plant_obs_dict:
                         for _species, _obs_list in st.session_state.plant_obs_dict.items():
                             for _o in _obs_list:
-                                if scorer.haversine_distance(_p["lat"], _p["lon"], _o["lat"], _o["lon"]) <= 0.2:
+                                if scorer.haversine_distance(c_lat, c_lon, _o["lat"], _o["lon"]) <= 0.2:
                                     _count += 1
-                    _park_counts.append(_count)
-                _park_df["plants_count"] = _park_counts
+                                    
+                    html = f"<b>🌳 {poly['name']}</b><br>Plant Observations (0.2mi): {_count}<br>Center: {c_lat:.5f}, {c_lon:.5f}"
+                    
+                    color = "#228b22"  # green
+                    fill_opacity = 0.3
+                    if "water" in poly["tags"].get("natural", ""):
+                        color = "#1e90ff" # blue
+                        fill_opacity = 0.4
+                        
+                    folium.Polygon(
+                        locations=coords,
+                        color=color,
+                        weight=1,
+                        fill=True,
+                        fill_color=color,
+                        fill_opacity=fill_opacity,
+                        tooltip=folium.Tooltip(html)
+                    ).add_to(m)
                 
-                _park_cdata = np.column_stack([
-                    _park_df["name"].astype(str).values,
-                    _park_df["plants_count"].astype(str).values,
-                    _park_df["lat"].map("{:.5f}".format).values,
-                    _park_df["lon"].map("{:.5f}".format).values,
-                ])
-                
-                fig.add_trace(go.Scattermapbox(
-                    lat=_park_df["lat"],
-                    lon=_park_df["lon"],
-                    mode="markers",
-                    marker=dict(size=12, color="#1a7f37", symbol="circle"),
-                    customdata=_park_cdata,
-                    hovertemplate=(
-                        "<b>🌳 %{customdata[0]}</b><br>"
-                        "Plant Observations: %{customdata[1]}<br>"
-                        "Location: %{customdata[2]}, %{customdata[3]}"
-                        "<extra></extra>"
-                    ),
-                    name="Parks",
-                ))
+                # Draw local Lines (Trails/Streams)
+                for line in _local_features.get("lines", []):
+                    coords = line["coords"]
+                    
+                    color = "orange"
+                    width = 3
+                    if "waterway" in line["tags"]:
+                        color = "cyan"
+                        width = 4
+                    elif "power" in line["tags"]:
+                        color = "yellow"
+                        width = 2
+                        
+                    folium.PolyLine(
+                        locations=coords,
+                        color=color,
+                        weight=width,
+                        tooltip=line["name"]
+                    ).add_to(m)
 
             # Candidate star marker from the dropdown above
-            fig.add_trace(go.Scattermapbox(
-                lat=[_main_pin_lat],
-                lon=[_main_pin_lon],
-                mode="markers",
-                marker=dict(size=18, color="#00e5ff", symbol="star"),
-                hovertext=f"📌 Selected: {_main_pin_lat:.6f}, {_main_pin_lon:.6f}",
-                hoverinfo="text",
-                name="Selected",
-                showlegend=False,
-            ))
+            folium.Marker(
+                location=[_main_pin_lat, _main_pin_lon],
+                tooltip=f"📌 Selected: {_main_pin_lat:.6f}, {_main_pin_lon:.6f}",
+                icon=folium.Icon(color="cyan", icon="star")
+            ).add_to(m)
 
             # Custom center marker
-            fig.add_trace(go.Scattermapbox(
-                lat=[st.session_state.grid_center_lat],
-                lon=[st.session_state.grid_center_lon],
-                mode="markers+text",
-                marker=dict(size=14, color="white", symbol="star"),
-                text=["Grid Center"],
-                textposition="top right",
-                textfont=dict(color="white", size=11),
-                hoverinfo="text",
-                hovertext=f"Grid Center ({st.session_state.grid_center_lat}, {st.session_state.grid_center_lon})",
-                name="Center",
-                showlegend=False,
-            ))
+            folium.Marker(
+                location=[st.session_state.grid_center_lat, st.session_state.grid_center_lon],
+                tooltip=f"Grid Center ({st.session_state.grid_center_lat}, {st.session_state.grid_center_lon})",
+                icon=folium.Icon(color="white", icon="star")
+            ).add_to(m)
 
-            # Preserve manual zoom/pan state unless grid parameters change
-            grid_rev_key = f"{st.session_state.grid_center_lat}_{st.session_state.grid_center_lon}_{st.session_state.grid_radius_mi}"
+            # Add custom Right-Click (contextmenu) Google Maps link
+            from branca.element import MacroElement
+            from jinja2 import Template
 
-            _cbar_title = color_title   # "Combined Suitability" or "Match Rate"
-            _cbar_fmt   = ".0%" if color_col == "MatchRate" else ".2f"
-            fig.update_layout(
-                uirevision=grid_rev_key,
-                paper_bgcolor="#0d1117",
-                plot_bgcolor="#0d1117",
-                margin=dict(l=0, r=0, t=0, b=0),
-                coloraxis_colorbar=dict(
-                    title=dict(
-                        text=_cbar_title,
-                        font=dict(color="#e6edf3"),
-                    ),
-                    tickformat=_cbar_fmt,
-                    len=0.55,
-                    bgcolor="#161b22",
-                    bordercolor="#30363d",
-                    borderwidth=1,
-                    tickfont=dict(color="#e6edf3"),
-                ),
-            )
+            class RightClickGoogleMaps(MacroElement):
+                _template = Template(u"""
+                    {% macro script(this, kwargs) %}
+                        var {{ this.get_name() }} = function(e) {
+                            var lat = e.latlng.lat.toFixed(5);
+                            var lng = e.latlng.lng.toFixed(5);
+                            var gmaps_url = `https://www.google.com/maps/search/?api=1&query=${lat},${lng}`;
+                            var content = `<div style="text-align: center;">
+                                <b>Coordinates:</b> ${lat}, ${lng}<br><br>
+                                <a href="${gmaps_url}" target="_blank" style="background-color: #4CAF50; color: white; padding: 5px 10px; text-decoration: none; border-radius: 3px; display: inline-block;">Open in Google Maps</a>
+                            </div>`;
+                            
+                            L.popup()
+                                .setLatLng(e.latlng)
+                                .setContent(content)
+                                .openOn({{ this._parent.get_name() }});
+                        };
+                        {{ this._parent.get_name() }}.on('contextmenu', {{ this.get_name() }});
+                    {% endmacro %}
+                """)
+                def __init__(self):
+                    super(RightClickGoogleMaps, self).__init__()
+                    self._name = 'RightClickGoogleMaps'
 
-            st.caption("💡 **Tip**: Click any point on the map below to instantly load its coordinates into the **Coordinate Copier**!")
+            m.add_child(RightClickGoogleMaps())
 
-            # Enable interactive click and selection directly on the map
-            st.plotly_chart(
-                fig,
-                use_container_width=True,
-                config={"scrollZoom": True},
-                on_select="rerun",
+            # Add LatLngPopup allowing click to copy coordinates
+            folium.LatLngPopup().add_to(m)
+
+            st.caption("💡 **Tip**: Click anywhere on the map to see its coordinates in a popup and load it into the **Coordinate Copier**!")
+
+            # Render Folium map
+            st_folium(
+                m,
+                width=1200,
+                height=650,
+                returned_objects=["last_clicked"],
                 key="scoring_map"
             )
 

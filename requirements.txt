@@ -8,3 +8,7 @@ plotly
 pillow
 streamlit-image-coordinates
 pyarrow
+
+folium
+streamlit-folium
+branca
