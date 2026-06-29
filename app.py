@@ -1540,6 +1540,7 @@ with tab3:
             active_lon = clicked_lon if clicked_lon is not None else _main_pin_lon
                     
             # Dynamic local OSM traces (Trails/Streams and Park Boundaries) for the active point
+            _parks = []
             if active_lat is not None and active_lon is not None:
                 r_lat = round(active_lat, 2)
                 r_lon = round(active_lon, 2)
@@ -1562,6 +1563,15 @@ with tab3:
                             for _o in _obs_list:
                                 if scorer.haversine_distance(c_lat, c_lon, _o["lat"], _o["lon"]) <= 0.2:
                                     _count += 1
+                                    
+                    _parks.append({
+                        "osm_id": poly.get("id", "0"),
+                        "type": poly.get("type", "unknown"),
+                        "name": poly.get("name", "Unnamed Park"),
+                        "lat": c_lat,
+                        "lon": c_lon,
+                        "plants_count": _count
+                    })
                                     
                     html = f"<b>🌳 {poly['name']}</b><br>Plant Observations (0.2mi): {_count}<br>Center: {c_lat:.5f}, {c_lon:.5f}"
                     
