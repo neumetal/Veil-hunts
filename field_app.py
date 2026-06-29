@@ -683,10 +683,30 @@ else:
             custom_data_cols += ["CombinedScore"]
 
 
+        # Preserve user's manual pan/zoom unless they changed the grid center
+        map_center_lat = map_center["lat"]
+        map_center_lon = map_center["lon"]
+        map_zoom = auto_zoom
+        
+        if "last_map_grid" not in st.session_state:
+            st.session_state.last_map_grid = (st.session_state.grid_center_lat, st.session_state.grid_center_lon)
+        
+        grid_changed = st.session_state.last_map_grid != (st.session_state.grid_center_lat, st.session_state.grid_center_lon)
+        if grid_changed:
+            st.session_state.last_map_grid = (st.session_state.grid_center_lat, st.session_state.grid_center_lon)
+        else:
+            if "scoring_map" in st.session_state and st.session_state.scoring_map:
+                _sm = st.session_state.scoring_map
+                if _sm.get("center"):
+                    map_center_lat = _sm["center"]["lat"]
+                    map_center_lon = _sm["center"]["lng"]
+                if _sm.get("zoom"):
+                    map_zoom = _sm["zoom"]
+
         # Build Folium Map
         m = folium.Map(
-            location=[map_center["lat"], map_center["lon"]], 
-            zoom_start=auto_zoom, 
+            location=[map_center_lat, map_center_lon], 
+            zoom_start=map_zoom, 
             tiles="cartodbdark_matter",
             control_scale=True
         )
