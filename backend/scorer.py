@@ -619,6 +619,7 @@ def score_contrast_observations(
         )
         pt_avg["Lat_g"] = pt_avg["Lat"].round(4)
         pt_avg["Lon_g"] = pt_avg["Lon"].round(4)
+        pt_avg = pt_avg.groupby(["Lat_g", "Lon_g"])["CloudCover_Pct"].mean().reset_index()
 
         if obs_cond == "Cloudy":
             pt_avg["_contrib"] = pt_avg["CloudCover_Pct"] / 100.0
