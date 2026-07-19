@@ -607,12 +607,19 @@ else:
         _score_min = float(map_df["CombinedScore"].min()) if "CombinedScore" in map_df.columns else 0.0
         _score_max = float(map_df["CombinedScore"].max()) if "CombinedScore" in map_df.columns else 1.0
         _score_max = _score_max if _score_max > _score_min else _score_min + 0.001
+        
+        if "score_range_filter" not in st.session_state:
+            _vals = map_df["CombinedScore"].dropna() if "CombinedScore" in map_df.columns else pd.Series(dtype=float)
+            _p90 = float(np.percentile(_vals, 90)) if len(_vals) > 0 else _score_min
+            st.session_state.score_range_filter = (
+                round(max(_score_min, _p90), 3),
+                round(_score_max, 3)
+            )
 
         _filter_range = st.slider(
             "Filter by Combined Score",
             min_value=round(_score_min, 3),
             max_value=round(_score_max, 3),
-            value=(round(_score_min, 3), round(_score_max, 3)),
             step=round((_score_max - _score_min) / 200, 4) or 0.001,
             help="Hide grid points outside this score range. Drag either end to focus the map.",
             key="score_range_filter",
