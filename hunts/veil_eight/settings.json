@@ -28,6 +28,19 @@
       "anchor_x": 0.49714285714285716,
       "anchor_y": 0.4942857142857143,
       "visible": true
+    },
+    {
+      "name": "cea86966-3_-_Northeast.png",
+      "path": "C:\\veil_finder_project\\hunts\\veil_eight\\overlays\\cea86966-3_-_Northeast.png",
+      "lat": 39.66512877708032,
+      "lon": -74.88132267207779,
+      "width": 389.1,
+      "height": 389.1,
+      "rotation": 0.0,
+      "opacity": 0.5,
+      "anchor_x": 0.5,
+      "anchor_y": 0.5,
+      "visible": true
     }
   ]
 }

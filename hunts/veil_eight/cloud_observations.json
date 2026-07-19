@@ -19,5 +19,19 @@
     "time_start": "12:00",
     "time_end": "15:00",
     "relation": "Trailcam was Cloudier than Home"
+  },
+  {
+    "id": "72023cfd-f772-453e-b9b1-14c741bc9cb8",
+    "date": "2026-06-29",
+    "time_start": "06:00",
+    "time_end": "09:00",
+    "relation": "Trailcam was Cloudier than Home"
+  },
+  {
+    "id": "e86f97d7-15af-42c9-9169-8a3e9275cc75",
+    "date": "2026-06-29",
+    "time_start": "08:00",
+    "time_end": "09:00",
+    "relation": "Trailcam was Cloudier than Home"
   }
 ]

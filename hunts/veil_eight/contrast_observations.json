@@ -185,5 +185,148 @@
     "pct_clear": 7.1,
     "pct_cloudy": 62.9,
     "created_at": "2026-06-27T17:26:25.672435"
+  },
+  {
+    "id": "f17ac855-09eb-4293-acd0-86be3ee547e7",
+    "date": "2026-06-28",
+    "window": "3PM-6PM",
+    "trailcam_condition": "Cloudy",
+    "notes": "",
+    "spread": 91.7,
+    "pct_clear": 14.4,
+    "pct_cloudy": 43.3,
+    "created_at": "2026-06-30T22:55:47.110058"
+  },
+  {
+    "id": "a0403c3f-072f-400d-bb67-770eb8ba2c75",
+    "date": "2026-06-29",
+    "window": "9AM-12PM",
+    "trailcam_condition": "Sunny",
+    "notes": "",
+    "spread": 98.7,
+    "pct_clear": 15.1,
+    "pct_cloudy": 9.3,
+    "created_at": "2026-06-30T22:56:11.527179"
+  },
+  {
+    "id": "5ed6545f-5830-493e-945c-3eb0adb3da64",
+    "date": "2026-07-01",
+    "window": "3PM-6PM",
+    "trailcam_condition": "Sunny",
+    "notes": "",
+    "spread": 94.3,
+    "pct_clear": 43.3,
+    "pct_cloudy": 13.4,
+    "created_at": "2026-07-03T21:54:02.739860"
+  },
+  {
+    "id": "87680ea5-fb6d-433c-85d9-130fb3aeb8f2",
+    "date": "2026-07-04",
+    "window": "9AM-12PM",
+    "trailcam_condition": "Sunny",
+    "notes": "",
+    "spread": 88.3,
+    "pct_clear": 53.7,
+    "pct_cloudy": 6.5,
+    "created_at": "2026-07-05T23:08:56.206294"
+  },
+  {
+    "id": "ab084e46-d67e-4d3c-93e8-ad7692ac97db",
+    "date": "2026-07-05",
+    "window": "12PM-3PM",
+    "trailcam_condition": "Sunny",
+    "notes": "",
+    "spread": 84.0,
+    "pct_clear": 5.0,
+    "pct_cloudy": 74.1,
+    "created_at": "2026-07-05T23:07:30.985462"
+  },
+  {
+    "id": "56effb0f-8745-4d14-97fd-db275bbb4013",
+    "date": "2026-07-08",
+    "window": "9AM-12PM",
+    "trailcam_condition": "Sunny",
+    "notes": "",
+    "spread": 100.0,
+    "pct_clear": 43.5,
+    "pct_cloudy": 34.1,
+    "created_at": "2026-07-10T19:48:57.078408"
+  },
+  {
+    "id": "098ca312-1adc-4fc5-9a82-501077be8a34",
+    "date": "2026-07-08",
+    "window": "3PM-6PM",
+    "trailcam_condition": "Sunny",
+    "notes": "",
+    "spread": 100.0,
+    "pct_clear": 57.8,
+    "pct_cloudy": 12.5,
+    "created_at": "2026-07-10T19:49:31.990567"
+  },
+  {
+    "id": "4ddd7110-55e1-443f-8bbd-89041235f1df",
+    "date": "2026-07-10",
+    "window": "9AM-12PM",
+    "trailcam_condition": "Sunny",
+    "notes": "",
+    "spread": 91.3,
+    "pct_clear": 5.8,
+    "pct_cloudy": 64.8,
+    "created_at": "2026-07-10T19:48:18.904424"
+  },
+  {
+    "id": "8530456c-317d-420a-bbbd-961a841e5e5b",
+    "date": "2026-07-11",
+    "window": "12PM-3PM",
+    "trailcam_condition": "Cloudy",
+    "notes": "",
+    "spread": 90.3,
+    "pct_clear": 7.4,
+    "pct_cloudy": 78.5,
+    "created_at": "2026-07-15T14:18:53.832277"
+  },
+  {
+    "id": "bba7e02e-f932-48ba-9d02-1c180b4507d1",
+    "date": "2026-07-12",
+    "window": "3PM-6PM",
+    "trailcam_condition": "Sunny",
+    "notes": "",
+    "spread": 97.7,
+    "pct_clear": 56.1,
+    "pct_cloudy": 22.6,
+    "created_at": "2026-07-15T14:20:58.588979"
+  },
+  {
+    "id": "3eabbbd6-77ef-46ec-a724-9712372669bd",
+    "date": "2026-07-12",
+    "window": "9AM-12PM",
+    "trailcam_condition": "Sunny",
+    "notes": "",
+    "spread": 97.7,
+    "pct_clear": 67.9,
+    "pct_cloudy": 15.3,
+    "created_at": "2026-07-15T14:21:26.043962"
+  },
+  {
+    "id": "a179c4e9-c162-458f-9c57-89994d809c00",
+    "date": "2026-07-16",
+    "window": "9AM-12PM",
+    "trailcam_condition": "Cloudy",
+    "notes": "",
+    "spread": 95.0,
+    "pct_clear": 25.9,
+    "pct_cloudy": 24.0,
+    "created_at": "2026-07-18T21:51:38.023469"
+  },
+  {
+    "id": "217b0fc6-cfca-4f91-8c04-aaa91675bcde",
+    "date": "2026-07-17",
+    "window": "12PM-3PM",
+    "trailcam_condition": "Cloudy",
+    "notes": "",
+    "spread": 79.3,
+    "pct_clear": 19.0,
+    "pct_cloudy": 14.2,
+    "created_at": "2026-07-18T21:50:08.658124"
   }
 ]
