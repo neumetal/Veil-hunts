@@ -393,6 +393,7 @@ def get_scores() -> pd.DataFrame | None:
                     else:
                         base_scores = grid_df.drop(columns=["Lat_g", "Lon_g"])
                 else:
+                    filtered_df = pd.DataFrame()
                     base_scores = grid_df.drop(columns=["Lat_g", "Lon_g"])
                 
                 # Ensure missing columns are populated
@@ -417,7 +418,7 @@ def get_scores() -> pd.DataFrame | None:
                 st.session_state.scores = scorer.score_cloud_observations(
                     st.session_state.scores,
                     st.session_state.cloud_obs_list,
-                    fog_df
+                    filtered_df
                 )
 
                 # Score High-Contrast Cloud Days

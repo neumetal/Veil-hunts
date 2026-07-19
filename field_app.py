@@ -369,7 +369,6 @@ def get_scores() -> pd.DataFrame | None:
                     filtered_df["Lon_g"] = filtered_df["Lon"].round(4)
                     
                     # Clean up the merge artifacts so score_all_observations sees exact Lat/Lon
-                    # Some merges create Lat_x, Lon_x if there's overlap. Let's explicitly ensure Lat, Lon are from fog_df
                     if "Lat_x" in filtered_df.columns:
                         filtered_df = filtered_df.rename(columns={"Lat_x": "Lat", "Lon_x": "Lon"})
                     
@@ -389,6 +388,7 @@ def get_scores() -> pd.DataFrame | None:
                     else:
                         base_scores = grid_df.drop(columns=["Lat_g", "Lon_g"])
                 else:
+                    filtered_df = pd.DataFrame()
                     base_scores = grid_df.drop(columns=["Lat_g", "Lon_g"])
                 
                 # Ensure missing columns are populated
@@ -413,14 +413,14 @@ def get_scores() -> pd.DataFrame | None:
                 st.session_state.scores = scorer.score_cloud_observations(
                     st.session_state.scores,
                     st.session_state.cloud_obs_list,
-                    fog_df
+                    filtered_df
                 )
 
                 # Score High-Contrast Cloud Days
                 st.session_state.scores = score_contrast_observations(
                     st.session_state.scores,
                     st.session_state.contrast_obs_list,
-                    fog_df
+                    filtered_df
                 )
     return st.session_state.scores
 
