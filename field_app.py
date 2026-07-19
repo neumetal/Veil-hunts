@@ -606,14 +606,20 @@ else:
         # ── Score range filter ─────────────────────────────────────────────
         _score_min = float(map_df["CombinedScore"].min()) if "CombinedScore" in map_df.columns else 0.0
         _score_max = float(map_df["CombinedScore"].max()) if "CombinedScore" in map_df.columns else 1.0
-        _score_max = _score_max if _score_max > _score_min else _score_min + 0.001
-        
+        # Safely initialize or bound the score range filter to prevent StreamlitAPIException
         if "score_range_filter" not in st.session_state:
             _vals = map_df["CombinedScore"].dropna() if "CombinedScore" in map_df.columns else pd.Series(dtype=float)
             _p90 = float(np.percentile(_vals, 90)) if len(_vals) > 0 else _score_min
             st.session_state.score_range_filter = (
                 round(max(_score_min, _p90), 3),
                 round(_score_max, 3)
+            )
+        else:
+            # Prevent out-of-bounds crash if the underlying data max/min changed
+            _cur_min, _cur_max = st.session_state.score_range_filter
+            st.session_state.score_range_filter = (
+                max(round(_score_min, 3), min(_cur_min, round(_score_max, 3))),
+                max(round(_score_min, 3), min(_cur_max, round(_score_max, 3)))
             )
 
         _filter_range = st.slider(
