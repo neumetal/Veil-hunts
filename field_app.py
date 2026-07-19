@@ -349,11 +349,20 @@ def get_scores() -> pd.DataFrame | None:
                     # Optimize memory: round Lat/Lon on the fly without duplicating the massive dataframe
                     temp_grid = grid_df.copy()
                     
-                    # Instead of an inner merge that duplicates data, we filter fog_df by checking if rounded coordinates are in the grid
-                    grid_set = set(zip(temp_grid["Lat_g"], temp_grid["Lon_g"]))
+                    # 1. Bounding box filter to drastically reduce rows before zip
+                    min_lat, max_lat = temp_grid["Lat_g"].min(), temp_grid["Lat_g"].max()
+                    min_lon, max_lon = temp_grid["Lon_g"].min(), temp_grid["Lon_g"].max()
                     
-                    fog_mask = pd.Series(list(zip(fog_df["Lat"].round(4), fog_df["Lon"].round(4)))).isin(grid_set)
-                    filtered_df = fog_df[fog_mask.values].copy()
+                    bbox_mask = (
+                        (fog_df["Lat"] >= (min_lat - 0.0001)) & (fog_df["Lat"] <= (max_lat + 0.0001)) &
+                        (fog_df["Lon"] >= (min_lon - 0.0001)) & (fog_df["Lon"] <= (max_lon + 0.0001))
+                    )
+                    small_fog = fog_df[bbox_mask].copy()
+                    
+                    # 2. Exact grid filter on the small subset
+                    grid_set = set(zip(temp_grid["Lat_g"], temp_grid["Lon_g"]))
+                    fog_mask = pd.Series(list(zip(small_fog["Lat"].round(4), small_fog["Lon"].round(4)))).isin(grid_set)
+                    filtered_df = small_fog[fog_mask.values].copy()
                     
                     # Ensure Lat_g and Lon_g exist for the downstream logic
                     filtered_df["Lat_g"] = filtered_df["Lat"].round(4)
